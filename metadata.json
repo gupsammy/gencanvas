@@ -1,0 +1,5 @@
+{
+  "name": "Gemini Infinite Canvas",
+  "description": "A generative AI canvas workspace. Drag and drop images, generate new visuals using Gemini 2.5 Flash Image, and iterate on existing layers with a context-aware prompt system.",
+  "requestFramePermissions": []
+}
