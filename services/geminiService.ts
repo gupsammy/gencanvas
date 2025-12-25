@@ -322,9 +322,9 @@ export const generateVideoContent = async (options: GenerateOptions): Promise<Ge
             veoParams.config.durationSeconds = 8;
             
             if (referenceImages.length > 0) {
-                // Use explicit object structure with referenceType 'ASSET'
+                // Use explicit object structure with referenceType 'asset' (lowercase per Veo 3.1 API)
                 veoParams.config.referenceImages = referenceImages.slice(0, 3).map(img => ({
-                    referenceType: 'ASSET', 
+                    referenceType: 'asset',
                     image: processImage(img)
                 }));
             }

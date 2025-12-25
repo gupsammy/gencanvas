@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { LayerData, Attachment, ModelId, MediaType, VideoMode, Annotation, PromptState } from '../types';
 import { DEFAULT_MODEL, STICKY_COLORS, GROUP_COLORS } from '../constants';
 import PromptBar from './PromptBar';
@@ -140,6 +140,11 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       videoMode: layer.generationMetadata?.videoMode || 'standard',
       voice: layer.generationMetadata?.voice || 'Kore'
   }));
+
+  // Memoized callback to prevent infinite loops
+  const handleDraftStateChange = useCallback((updates: Partial<PromptState>) => {
+      setDraftState(prev => ({ ...prev, ...updates }));
+  }, []);
 
   // Resize Layer State
   const [isResizingLayer, setIsResizingLayer] = useState(false);
@@ -879,7 +884,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
 
       {isSelected && !isResizingMode && !isResizingLayer && (layer.type === 'image' || layer.type === 'video') && (
         <div className="absolute top-full left-1/2 mt-4 z-50 layer-controls animate-in fade-in slide-in-from-top-2 duration-200 origin-top" style={{ transform: `translateX(-50%) scale(${1 / scale})` }}>
-           <PromptBar variant="floating" onSubmit={handlePromptSubmit} isGenerating={isGenerating} initialValues={draftState} onStateChange={(updates) => setDraftState(prev => ({ ...prev, ...updates }))} contextAttachments={!isExtendingMode && layer.type === 'image' ? [layerAttachment] : []} attachments={promptAttachments} onAttachmentsChange={setPromptAttachments} onSelectOnCanvasStart={onSelectOnCanvasStart} placeholder={isExtendingMode ? "Describe how to extend this video..." : (layer.type === 'video' ? "Remix this video..." : "Edit or remix this image...")} onCancel={() => onSelect('')} isExtension={isExtendingMode} />
+           <PromptBar variant="floating" onSubmit={handlePromptSubmit} isGenerating={isGenerating} initialValues={draftState} onStateChange={handleDraftStateChange} contextAttachments={!isExtendingMode && layer.type === 'image' ? [layerAttachment] : []} attachments={promptAttachments} onAttachmentsChange={setPromptAttachments} onSelectOnCanvasStart={onSelectOnCanvasStart} placeholder={isExtendingMode ? "Describe how to extend this video..." : (layer.type === 'video' ? "Remix this video..." : "Edit or remix this image...")} onCancel={() => onSelect('')} isExtension={isExtendingMode} />
         </div>
       )}
     </div>
