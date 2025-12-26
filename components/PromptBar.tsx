@@ -4,6 +4,36 @@ import { Paperclip, Send, X, Loader2, Settings2, Ratio, ThermometerSun, MonitorP
 import { ModelId, Attachment, MediaType, VideoMode, PromptState } from '../types';
 import { AVAILABLE_MODELS, DEFAULT_MODEL, AVAILABLE_VOICES } from '../constants';
 
+const PROMPTBAR_STORAGE_KEY = 'promptbar-settings';
+
+interface SavedSettings {
+  prompt: string;
+  mediaType: MediaType;
+  selectedModel: ModelId;
+  aspectRatio: string;
+  creativity: number;
+  imageSize: string;
+  videoResolution: '720p' | '1080p';
+  videoDuration: string;
+  imageCount: number;
+  selectedVoice: string;
+  videoMode: VideoMode;
+}
+
+const loadSavedSettings = (): Partial<SavedSettings> | null => {
+  try {
+    const saved = localStorage.getItem(PROMPTBAR_STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return null;
+};
+
+const saveSettings = (settings: SavedSettings) => {
+  try {
+    localStorage.setItem(PROMPTBAR_STORAGE_KEY, JSON.stringify(settings));
+  } catch {}
+};
+
 interface PromptBarProps {
   onSubmit: (
     prompt: string, 
@@ -56,25 +86,28 @@ const PromptBar: React.FC<PromptBarProps> = ({
   inputRef,
   isExtension = false
 }) => {
-  const [prompt, setPrompt] = useState(initialValues?.prompt || '');
-  const [mediaType, setMediaType] = useState<MediaType>(initialValues?.mediaType || 'image');
-  const [selectedModel, setSelectedModel] = useState<ModelId>(initialValues?.model || DEFAULT_MODEL);
+  const isGlobalVariant = variant === 'global';
+  const savedSettings = isGlobalVariant ? loadSavedSettings() : null;
+
+  const [prompt, setPrompt] = useState(initialValues?.prompt || savedSettings?.prompt || '');
+  const [mediaType, setMediaType] = useState<MediaType>(initialValues?.mediaType || savedSettings?.mediaType || 'image');
+  const [selectedModel, setSelectedModel] = useState<ModelId>(initialValues?.model || savedSettings?.selectedModel || DEFAULT_MODEL);
   const [internalAttachments, setInternalAttachments] = useState<Attachment[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
-  
+
   // Settings
-  const [aspectRatio, setAspectRatio] = useState(initialValues?.aspectRatio || "Auto");
-  const [creativity, setCreativity] = useState(initialValues?.creativity || 65); 
-  const [imageSize, setImageSize] = useState(initialValues?.imageSize || "1K");
-  const [videoResolution, setVideoResolution] = useState<'720p' | '1080p'>(initialValues?.videoResolution || "720p");
-  const [videoDuration, setVideoDuration] = useState("8");
-  const [imageCount, setImageCount] = useState(initialValues?.imageCount || 1);
-  const [selectedVoice, setSelectedVoice] = useState(initialValues?.voice || 'Kore');
-  
+  const [aspectRatio, setAspectRatio] = useState(initialValues?.aspectRatio || savedSettings?.aspectRatio || "Auto");
+  const [creativity, setCreativity] = useState(initialValues?.creativity || savedSettings?.creativity || 65);
+  const [imageSize, setImageSize] = useState(initialValues?.imageSize || savedSettings?.imageSize || "1K");
+  const [videoResolution, setVideoResolution] = useState<'720p' | '1080p'>(initialValues?.videoResolution || savedSettings?.videoResolution || "720p");
+  const [videoDuration, setVideoDuration] = useState(savedSettings?.videoDuration || "8");
+  const [imageCount, setImageCount] = useState(initialValues?.imageCount || savedSettings?.imageCount || 1);
+  const [selectedVoice, setSelectedVoice] = useState(initialValues?.voice || savedSettings?.selectedVoice || 'Kore');
+
   // Video Mode State
-  const [videoMode, setVideoMode] = useState<VideoMode>(initialValues?.videoMode || 'standard');
+  const [videoMode, setVideoMode] = useState<VideoMode>(initialValues?.videoMode || savedSettings?.videoMode || 'standard');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modeMenuRef = useRef<HTMLDivElement>(null);
@@ -100,6 +133,25 @@ const PromptBar: React.FC<PromptBarProps> = ({
           });
       }
   }, [prompt, mediaType, selectedModel, aspectRatio, creativity, imageSize, videoResolution, videoDuration, imageCount, videoMode, selectedVoice, onStateChange]);
+
+  // Persist settings to localStorage for global PromptBar
+  useEffect(() => {
+      if (isGlobalVariant) {
+          saveSettings({
+              prompt,
+              mediaType,
+              selectedModel,
+              aspectRatio,
+              creativity,
+              imageSize,
+              videoResolution,
+              videoDuration,
+              imageCount,
+              selectedVoice,
+              videoMode
+          });
+      }
+  }, [prompt, mediaType, selectedModel, aspectRatio, creativity, imageSize, videoResolution, videoDuration, imageCount, selectedVoice, videoMode, isGlobalVariant]);
 
 
   // Derived state
@@ -389,20 +441,20 @@ const PromptBar: React.FC<PromptBarProps> = ({
                       <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1">
                           <CopyIcon size={10} /> Batch Size
                       </label>
-                      <div className="flex gap-1">
-                          {IMAGE_COUNTS.map(count => (
-                              <button
-                                  key={count}
-                                  onClick={() => setImageCount(count)}
-                                  className={`px-2 py-1.5 rounded-md text-[10px] font-medium transition-colors border flex-1 ${
-                                      imageCount === count 
-                                      ? 'bg-primary/20 border-primary text-primary' 
-                                      : 'bg-surface/50 border-transparent text-gray-400 hover:text-white'
-                                  }`}
-                              >
-                                  {count}
-                              </button>
-                          ))}
+                      <div className="relative">
+                          <select
+                              value={imageCount}
+                              onChange={(e) => setImageCount(parseInt(e.target.value))}
+                              disabled={isGenerating}
+                              className="w-full appearance-none bg-surface/50 hover:bg-surface text-xs text-gray-300 py-2 pl-3 pr-8 rounded-lg border border-border focus:border-white/20 outline-none cursor-pointer transition-colors"
+                          >
+                              {IMAGE_COUNTS.map(count => (
+                                  <option key={count} value={count}>
+                                      {count} {count === 1 ? 'image' : 'images'}
+                                  </option>
+                              ))}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
                       </div>
                   </div>
                 )}
@@ -411,26 +463,22 @@ const PromptBar: React.FC<PromptBarProps> = ({
                 {mediaType === 'video' && (
                     <div className="space-y-1">
                         <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1">
-                            <Clock size={10} /> Duration (s)
+                            <Clock size={10} /> Duration
                         </label>
-                        <div className="flex gap-1">
-                            {VIDEO_DURATIONS.map(dur => {
-                                const isLocked = (videoMode === 'interpolation' || videoMode === 'references') && dur !== '8';
-                                return (
-                                    <button
-                                        key={dur}
-                                        onClick={() => setVideoDuration(dur)}
-                                        disabled={isLocked}
-                                        className={`px-2 py-1.5 rounded-md text-[10px] font-medium transition-colors border flex-1 ${
-                                            videoDuration === dur 
-                                            ? 'bg-primary/20 border-primary text-primary' 
-                                            : isLocked ? 'bg-surface/20 border-transparent text-gray-600 cursor-not-allowed' : 'bg-surface/50 border-transparent text-gray-400 hover:text-white'
-                                        }`}
-                                    >
-                                        {dur}s
-                                    </button>
-                                );
-                            })}
+                        <div className="relative">
+                            <select
+                                value={videoDuration}
+                                onChange={(e) => setVideoDuration(e.target.value)}
+                                disabled={isGenerating || videoMode === 'interpolation' || videoMode === 'references'}
+                                className="w-full appearance-none bg-surface/50 hover:bg-surface text-xs text-gray-300 py-2 pl-3 pr-8 rounded-lg border border-border focus:border-white/20 outline-none cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {VIDEO_DURATIONS.map(dur => (
+                                    <option key={dur} value={dur}>
+                                        {dur} seconds
+                                    </option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
                         </div>
                     </div>
                 )}
@@ -441,20 +489,20 @@ const PromptBar: React.FC<PromptBarProps> = ({
                       <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1">
                           <MonitorPlay size={10} /> Quality
                       </label>
-                      <div className="flex gap-1">
-                          {VIDEO_RESOLUTIONS.map(res => (
-                              <button
-                                  key={res}
-                                  onClick={() => setVideoResolution(res as any)}
-                                  className={`px-2 py-1.5 rounded-md text-[10px] font-medium transition-colors border flex-1 ${
-                                      videoResolution === res 
-                                      ? 'bg-primary/20 border-primary text-primary' 
-                                      : 'bg-surface/50 border-transparent text-gray-400 hover:text-white'
-                                  }`}
-                              >
-                                  {res}
-                              </button>
-                          ))}
+                      <div className="relative">
+                          <select
+                              value={videoResolution}
+                              onChange={(e) => setVideoResolution(e.target.value as '720p' | '1080p')}
+                              disabled={isGenerating}
+                              className="w-full appearance-none bg-surface/50 hover:bg-surface text-xs text-gray-300 py-2 pl-3 pr-8 rounded-lg border border-border focus:border-white/20 outline-none cursor-pointer transition-colors"
+                          >
+                              {VIDEO_RESOLUTIONS.map(res => (
+                                  <option key={res} value={res}>
+                                      {res === '720p' ? '720p (Standard)' : '1080p (HD)'}
+                                  </option>
+                              ))}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
                       </div>
                   </div>
                 )}
@@ -465,37 +513,18 @@ const PromptBar: React.FC<PromptBarProps> = ({
                         <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1">
                             <Layers size={10} /> Generation Mode
                         </label>
-                        <div className="flex gap-2">
-                             <button
-                                onClick={() => setVideoMode('standard')}
-                                className={`flex-1 py-1.5 px-2 rounded-md border text-[10px] transition-colors ${
-                                    videoMode === 'standard'
-                                    ? 'bg-primary/20 border-primary text-primary'
-                                    : 'bg-surface/50 border-transparent text-gray-400 hover:text-white'
-                                }`}
-                             >
-                                Text/Image to Video
-                             </button>
-                             <button
-                                onClick={() => setVideoMode('references')}
-                                className={`flex-1 py-1.5 px-2 rounded-md border text-[10px] transition-colors ${
-                                    videoMode === 'references'
-                                    ? 'bg-primary/20 border-primary text-primary'
-                                    : 'bg-surface/50 border-transparent text-gray-400 hover:text-white'
-                                }`}
-                             >
-                                Reference Images
-                             </button>
-                             <button
-                                onClick={() => setVideoMode('interpolation')}
-                                className={`flex-1 py-1.5 px-2 rounded-md border text-[10px] transition-colors ${
-                                    videoMode === 'interpolation'
-                                    ? 'bg-primary/20 border-primary text-primary'
-                                    : 'bg-surface/50 border-transparent text-gray-400 hover:text-white'
-                                }`}
-                             >
-                                Frame Interpolation
-                             </button>
+                        <div className="relative">
+                            <select
+                                value={videoMode}
+                                onChange={(e) => setVideoMode(e.target.value as VideoMode)}
+                                disabled={isGenerating}
+                                className="w-full appearance-none bg-surface/50 hover:bg-surface text-xs text-gray-300 py-2 pl-3 pr-8 rounded-lg border border-border focus:border-white/20 outline-none cursor-pointer transition-colors"
+                            >
+                                <option value="standard">Text/Image to Video</option>
+                                <option value="references">Reference Images</option>
+                                <option value="interpolation">Frame Interpolation</option>
+                            </select>
+                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
                         </div>
                         <div className="text-[9px] text-gray-500 mt-1 min-h-[14px]">
                             {videoMode === 'standard' && "Generate video from prompt. Optionally add 1 image to animate."}
@@ -511,20 +540,20 @@ const PromptBar: React.FC<PromptBarProps> = ({
                       <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider flex items-center gap-1">
                           <MonitorPlay size={10} /> Resolution
                       </label>
-                      <div className="flex gap-1">
-                          {IMAGE_SIZES.map(size => (
-                              <button
-                                  key={size}
-                                  onClick={() => setImageSize(size)}
-                                  className={`px-2 py-1.5 rounded-md text-[10px] font-medium transition-colors border flex-1 ${
-                                      imageSize === size 
-                                      ? 'bg-primary/20 border-primary text-primary' 
-                                      : 'bg-surface/50 border-transparent text-gray-400 hover:text-white'
-                                  }`}
-                              >
-                                  {size}
-                              </button>
-                          ))}
+                      <div className="relative">
+                          <select
+                              value={imageSize}
+                              onChange={(e) => setImageSize(e.target.value)}
+                              disabled={isGenerating}
+                              className="w-full appearance-none bg-surface/50 hover:bg-surface text-xs text-gray-300 py-2 pl-3 pr-8 rounded-lg border border-border focus:border-white/20 outline-none cursor-pointer transition-colors"
+                          >
+                              {IMAGE_SIZES.map(size => (
+                                  <option key={size} value={size}>
+                                      {size === '1K' ? '1K (1024px)' : size === '2K' ? '2K (2048px)' : '4K (4096px)'}
+                                  </option>
+                              ))}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
                       </div>
                   </div>
                 )}

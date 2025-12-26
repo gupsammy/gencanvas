@@ -211,7 +211,8 @@ const App: React.FC = () => {
     }
     setLayers(prev => [...prev, ...placeholders]);
     
-    for (const placeholder of placeholders) {
+    // Generate all images in parallel (up to 4 concurrent requests)
+    await Promise.all(placeholders.map(async (placeholder) => {
         try {
             let result; let title = prompt.substring(0, 30);
             if (mediaType === 'video') {
@@ -232,7 +233,7 @@ const App: React.FC = () => {
         } catch (error: any) {
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
         }
-    }
+    }));
     setLayers(current => { addToHistory(current); return current; }); setIsGenerating(false); setIsSidebarOpen(true);
   };
 
@@ -266,7 +267,8 @@ const App: React.FC = () => {
         setLayers(prev => [...prev, ...placeholders]);
     }
 
-    for (const placeholder of placeholders) {
+    // Generate all images in parallel (up to 4 concurrent requests)
+    await Promise.all(placeholders.map(async (placeholder, idx) => {
         try {
             const allBase64s = attachments.map(a => a.base64); let result; let title = "Remix";
             if (mediaType === 'video') {
@@ -284,9 +286,9 @@ const App: React.FC = () => {
                 result = imageRes; title = genTitle;
             }
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: result.url, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
-            if (requestCount === 1) setSelectedLayerId(placeholder.id);
+            if (requestCount === 1 && idx === 0) setSelectedLayerId(placeholder.id);
         } catch (error: any) { setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" })); }
-    }
+    }));
     setLayers(current => { addToHistory(current); return current; }); setIsGenerating(false); setIsSidebarOpen(true);
   };
 
