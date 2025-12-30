@@ -131,6 +131,19 @@ const App: React.FC = () => {
     return () => clearTimeout(timeoutId);
   }, [canvasOffset, scale, isHydrated]);
 
+  // Prevent browser zoom on pinch/Ctrl+scroll - must use native listener with passive: false
+  useEffect(() => {
+    const el = fileDropRef.current;
+    if (!el) return;
+    const preventBrowserZoom = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+      }
+    };
+    el.addEventListener('wheel', preventBrowserZoom, { passive: false });
+    return () => el.removeEventListener('wheel', preventBrowserZoom);
+  }, []);
+
   const isColliding = (rect: {x: number, y: number, width: number, height: number}, others: LayerData[]) => {
       const margin = 20; 
       for (const other of others) {
@@ -607,19 +620,34 @@ const App: React.FC = () => {
   const handleCanvasMouseDown = (e: React.MouseEvent) => { if (e.button === 1 || (e.button === 0 && e.shiftKey)) { e.preventDefault(); setIsPanning(true); panStartRef.current = { x: e.clientX, y: e.clientY }; } else { handleBackgroundClick(e); } };
   const handleCanvasMouseMove = (e: React.MouseEvent) => { if (isPanning) { const dx = e.clientX - panStartRef.current.x; const dy = e.clientY - panStartRef.current.y; setCanvasOffset(prev => ({ x: prev.x + dx, y: prev.y + dy })); panStartRef.current = { x: e.clientX, y: e.clientY }; } };
   const handleCanvasMouseUp = () => { setIsPanning(false); };
-  const handleWheel = (e: React.WheelEvent) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); const newScale = Math.min(Math.max(scale + (-e.deltaY * 0.001), 0.1), 5); setScale(newScale); } else { e.preventDefault(); setCanvasOffset(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY })); } };
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const worldX = (mouseX - canvasOffset.x) / scale;
+      const worldY = (mouseY - canvasOffset.y) / scale;
+      const newScale = Math.min(Math.max(scale + (-e.deltaY * 0.003), 0.1), 5);
+      setScale(newScale);
+      setCanvasOffset({ x: mouseX - worldX * newScale, y: mouseY - worldY * newScale });
+    } else {
+      e.preventDefault();
+      setCanvasOffset(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
+    }
+  };
   const zoomIn = () => setScale(s => Math.min(s + 0.1, 5)); const zoomOut = () => setScale(s => Math.max(s - 0.1, 0.1));
 
   return (
     <div className={`w-screen h-screen bg-background relative overflow-hidden flex flex-col ${isSelectionMode ? 'cursor-crosshair' : ''}`}>
       {isSelectionMode && <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[60] bg-primary text-white px-6 py-2 rounded-full shadow-lg font-bold animate-pulse pointer-events-none">Click a layer to select it as reference</div>}
 
-      <div className={`flex-1 relative overflow-hidden ${isPanning ? 'cursor-grabbing' : ''}`} onDrop={handleDrop} onDragOver={handleDragOver} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} onWheel={handleWheel} ref={fileDropRef}>
+      <div className={`flex-1 relative overflow-hidden ${isPanning ? 'cursor-grabbing' : ''}`} style={{ touchAction: 'none' }} onDrop={handleDrop} onDragOver={handleDragOver} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} onWheel={handleWheel} ref={fileDropRef}>
         <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#3f3f46 1px, transparent 1px)', backgroundSize: `${20 * scale}px ${20 * scale}px`, backgroundPosition: `${canvasOffset.x}px ${canvasOffset.y}px` }} />
         {layers.length === 0 && !isGenerating && (
              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="text-center space-y-4 opacity-40">
-                    <div className="bg-surface p-6 rounded-3xl border border-border inline-block"><ImageIcon size={48} className="mx-auto mb-4 text-gray-500" /><h2 className="text-2xl font-bold text-gray-200">Infinite Canvas</h2><p className="text-gray-400 max-w-sm mt-2">Drag & Drop images or videos here<br/>or use the prompt bar below to generate.</p></div>
+                    <div className="bg-surface p-6 rounded-3xl border border-border inline-block"><ImageIcon size={48} className="mx-auto mb-4 text-gray-500" /><h2 className="text-2xl font-bold text-gray-200">AI Canvas</h2><p className="text-gray-400 max-w-sm mt-2">Drag & drop images or videos,<br/>or use the prompt bar to generate with AI.</p></div>
                 </div>
              </div>
         )}
@@ -670,28 +698,28 @@ const App: React.FC = () => {
           </div>
       )}
       
-      <div className="absolute top-4 left-4 z-50 pointer-events-none flex flex-col gap-4">
-         <div className="bg-surface/50 backdrop-blur border border-border/50 px-3 py-1.5 rounded-full text-xs text-gray-400 font-medium flex items-center gap-4 shadow-lg pointer-events-auto">
-             <span>Gemini Canvas</span><span className="w-px h-3 bg-white/10"></span><span className="flex items-center gap-1"><MousePointer2 size={12}/> Select</span><span className="flex items-center gap-1"><span className="border border-gray-500 rounded px-1 text-[10px]">Shift</span> + Drag to Pan</span>
-         </div>
-         
-         {/* Tools Toolbar */}
-         <div className="bg-surface/80 backdrop-blur border border-border rounded-lg shadow-xl p-1.5 flex flex-col gap-1 pointer-events-auto w-10">
-            <button onClick={createSticky} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Sticky Note"><StickyNote size={20} /></button>
-            <button onClick={createTextLayer} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Text Layer"><TypeIcon size={20} /></button>
-            <button onClick={createGroup} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Group Frame"><BoxSelect size={20} /></button>
-            <button onClick={createDrawingLayer} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Drawing Layer"><Pencil size={20} /></button>
-            <div className="w-full h-px bg-white/10 my-0.5"></div>
-            <button onClick={handleClearCanvas} className="p-1.5 hover:bg-red-500/20 rounded-md text-red-400 hover:text-red-300 transition-colors" title="Clear Canvas"><Trash2 size={20} /></button>
+      {/* Center-top branding */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
+         <div className="bg-surface/50 backdrop-blur border border-border/50 px-3 py-1.5 rounded-full text-xs text-gray-400 font-medium flex items-center gap-4 shadow-lg">
+             <span>AI Canvas</span><span className="w-px h-3 bg-white/10"></span><span className="flex items-center gap-1"><MousePointer2 size={12}/> Select</span><span className="flex items-center gap-1"><span className="border border-gray-500 rounded px-1 text-[10px]">Shift</span> + Drag to Pan</span>
          </div>
       </div>
 
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto flex gap-1">
-          <button onClick={undo} disabled={historyIndex === 0} className={`p-2 rounded-full bg-surface/80 backdrop-blur border border-border text-gray-400 hover:text-white transition-colors ${historyIndex === 0 ? 'opacity-50 cursor-not-allowed' : ''}`} title="Undo (Ctrl+Z)"><Undo2 size={16} /></button>
-          <button onClick={redo} disabled={historyIndex === history.length - 1} className={`p-2 rounded-full bg-surface/80 backdrop-blur border border-border text-gray-400 hover:text-white transition-colors ${historyIndex === history.length - 1 ? 'opacity-50 cursor-not-allowed' : ''}`} title="Redo (Ctrl+Shift+Z)"><Redo2 size={16} /></button>
+      {/* Right-side Toolbar with Undo/Redo */}
+      <div className="absolute top-4 right-4 z-50 pointer-events-auto bg-surface/80 backdrop-blur border border-border rounded-lg shadow-xl p-1.5 flex flex-col gap-1 w-10">
+         <button onClick={undo} disabled={historyIndex === 0} className={`p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors ${historyIndex === 0 ? 'opacity-50 cursor-not-allowed' : ''}`} title="Undo (Ctrl+Z)"><Undo2 size={20} /></button>
+         <button onClick={redo} disabled={historyIndex === history.length - 1} className={`p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors ${historyIndex === history.length - 1 ? 'opacity-50 cursor-not-allowed' : ''}`} title="Redo (Ctrl+Shift+Z)"><Redo2 size={20} /></button>
+         <div className="w-full h-px bg-white/10 my-0.5"></div>
+         <button onClick={createSticky} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Sticky Note"><StickyNote size={20} /></button>
+         <button onClick={createTextLayer} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Text Layer"><TypeIcon size={20} /></button>
+         <button onClick={createGroup} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Group Frame"><BoxSelect size={20} /></button>
+         <button onClick={createDrawingLayer} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Drawing Layer"><Pencil size={20} /></button>
+         <div className="w-full h-px bg-white/10 my-0.5"></div>
+         <button onClick={handleClearCanvas} className="p-1.5 hover:bg-red-500/20 rounded-md text-red-400 hover:text-red-300 transition-colors" title="Clear Canvas"><Trash2 size={20} /></button>
       </div>
 
-      <div className="absolute bottom-4 left-4 z-50 pointer-events-auto bg-surface/80 backdrop-blur border border-border rounded-lg shadow-lg flex flex-col p-1 gap-1">
+      {/* Zoom controls - above minimap */}
+      <div className="absolute bottom-52 right-4 z-50 pointer-events-auto bg-surface/80 backdrop-blur border border-border rounded-lg shadow-lg flex flex-col p-1 gap-1">
             <button onClick={zoomIn} className="p-2 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Zoom In"><ZoomIn size={18} /></button>
             <div className="text-[10px] text-center font-mono text-gray-500 py-1 border-y border-white/5">{Math.round(scale * 100)}%</div>
             <button onClick={zoomOut} className="p-2 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Zoom Out"><ZoomOut size={18} /></button>
