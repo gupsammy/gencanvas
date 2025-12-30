@@ -1,20 +1,57 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Aether
 
-# Run and deploy your AI Studio app
+An infinite canvas for AI-powered media generation. Create images, videos, and audio using Google's Gemini API on a pannable, zoomable workspace.
 
-This contains everything you need to run your app locally.
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-View your app in AI Studio: https://ai.studio/apps/drive/1QLDD_76cn6JZP0BgEyBmCUyZkDOMI7IP
+## Features
 
-## Run Locally
+- **Infinite Canvas** - Pan and zoom freely across your workspace
+- **AI Image Generation** - Generate images with Gemini Flash or Pro models
+- **AI Video Generation** - Create videos with Veo, including interpolation between images
+- **AI Audio Generation** - Text-to-speech with multiple voice options
+- **Layer System** - Organize content with layers, groups, and z-ordering
+- **Annotations** - Draw and add text overlays on any layer
+- **Remix Workflow** - Use generated content as references for new generations
+- **Persistent State** - Canvas state saved locally via IndexedDB
 
-**Prerequisites:**  Node.js
+## Getting Started
 
+**Prerequisites:** Node.js 18+
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+# Install dependencies
+npm install
+
+# Create environment file
+echo "GEMINI_API_KEY=your_api_key_here" > .env.local
+
+# Start development server
+npm run dev
+```
+
+Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
+
+## Usage
+
+| Action | Input |
+|--------|-------|
+| Pan | `Shift` + drag or middle mouse |
+| Zoom | `Ctrl/Cmd` + scroll |
+| Select | Click layer |
+| Generate | Enter prompt in bottom bar |
+
+## Tech Stack
+
+- React 18 with TypeScript
+- Vite for bundling
+- Google GenAI SDK
+- IndexedDB for persistence
+- Tailwind CSS
+
+## License
+
+MIT
