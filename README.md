@@ -1,4 +1,4 @@
-# Aether
+# AICanvas
 
 An infinite canvas for AI-powered media generation. Create images, videos, and audio using Google's Gemini API on a pannable, zoomable workspace.
 
