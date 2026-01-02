@@ -3,13 +3,13 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { LayerData, Attachment, ModelId, MediaType, VideoMode, Annotation, PromptState } from '../types';
 import { DEFAULT_MODEL, STICKY_COLORS, GROUP_COLORS } from '../constants';
 import PromptBar from './PromptBar';
-import { 
-    Move, Trash2, MoreHorizontal, Copy, FlipHorizontal, 
+import {
+    Move, Trash2, MoreHorizontal, Copy, FlipHorizontal,
     FlipVertical, Download, Crop, ChevronRight, X,
     Edit3, PlusCircle, Eraser, Play, Volume2, VolumeX, Loader2, AlertCircle,
     Pencil, Type as TypeIcon, Palette, RotateCcw, BoxSelect, StickyNote,
     BringToFront, SendToBack, ArrowUp, ArrowDown, Mic, Pause, Minus, Plus,
-    Maximize
+    Maximize, Square
 } from 'lucide-react';
 
 interface CanvasLayerProps {
@@ -53,6 +53,7 @@ interface CanvasLayerProps {
 }
 
 const DRAWING_COLORS = ['#FFFFFF', '#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#6366F1', '#8B5CF6', '#EC4899', '#000000'];
+const STROKE_WIDTHS = [1, 2, 3, 4, 6, 8, 12, 16];
 
 // Helper to determine text color based on background
 const getContrastColor = (hexColor: string) => {
@@ -109,16 +110,21 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
 
   // Annotation State
-  const [tool, setTool] = useState<'cursor' | 'pencil' | 'text'>('cursor');
+  const [tool, setTool] = useState<'cursor' | 'pencil' | 'text' | 'rectangle'>('cursor');
   const [color, setColor] = useState('#EF4444');
+  const [strokeWidth, setStrokeWidth] = useState(3);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showStrokePicker, setShowStrokePicker] = useState(false);
   const [drawingPath, setDrawingPath] = useState<{x: number, y: number}[]>([]);
+  const [drawingRect, setDrawingRect] = useState<{startX: number, startY: number, endX?: number, endY?: number} | null>(null);
   
   // Annotation Selection
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [isDraggingAnnotation, setIsDraggingAnnotation] = useState(false);
   const [isResizingAnnotation, setIsResizingAnnotation] = useState(false);
-  const annotationDragStartRef = useRef<{x: number, y: number, initialX: number, initialY: number, initialSize?: number}>({ x: 0, y: 0, initialX: 0, initialY: 0 });
+  const [isDraggingVertex, setIsDraggingVertex] = useState(false);
+  const [draggingVertexIndex, setDraggingVertexIndex] = useState<number | null>(null);
+  const annotationDragStartRef = useRef<{x: number, y: number, initialX: number, initialY: number, initialSize?: number, initialVertices?: {x: number, y: number}[]}>({ x: 0, y: 0, initialX: 0, initialY: 0 });
 
   // Text Tool State
   const [textInput, setTextInput] = useState<{x: number, y: number, value: string} | null>(null);
@@ -250,6 +256,17 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                       ctx.lineTo(ann.points[i].x, ann.points[i].y);
                   }
                   ctx.stroke();
+              } else if (ann.type === 'rectangle') {
+                  if (ann.vertices.length !== 4) return;
+                  ctx.beginPath();
+                  ctx.strokeStyle = ann.color;
+                  ctx.lineWidth = ann.strokeWidth;
+                  ctx.moveTo(ann.vertices[0].x, ann.vertices[0].y);
+                  for (let i = 1; i < ann.vertices.length; i++) {
+                      ctx.lineTo(ann.vertices[i].x, ann.vertices[i].y);
+                  }
+                  ctx.closePath();
+                  ctx.stroke();
               }
           });
       }
@@ -257,7 +274,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       if (drawingPath.length > 1) {
           ctx.beginPath();
           ctx.strokeStyle = color;
-          ctx.lineWidth = 3;
+          ctx.lineWidth = strokeWidth;
           ctx.moveTo(drawingPath[0].x, drawingPath[0].y);
           for (let i = 1; i < drawingPath.length; i++) {
               ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
@@ -265,7 +282,22 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           ctx.stroke();
       }
 
-  }, [layer.width, layer.height, layer.annotations, drawingPath, color]);
+      // Draw rectangle preview while drawing
+      if (drawingRect && drawingRect.endX !== undefined && drawingRect.endY !== undefined) {
+          const minX = Math.min(drawingRect.startX, drawingRect.endX);
+          const minY = Math.min(drawingRect.startY, drawingRect.endY);
+          const width = Math.abs(drawingRect.endX - drawingRect.startX);
+          const height = Math.abs(drawingRect.endY - drawingRect.startY);
+
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = strokeWidth;
+          ctx.setLineDash([5, 5]);
+          ctx.strokeRect(minX, minY, width, height);
+          ctx.setLineDash([]);
+      }
+
+  }, [layer.width, layer.height, layer.annotations, drawingPath, color, strokeWidth, drawingRect]);
 
   // ... [Keep Annotation manipulation functions similar to before, summarized below]
   const handleAnnotationMouseDown = (e: React.MouseEvent, annId: string) => {
@@ -275,6 +307,9 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       const ann = layer.annotations?.find(a => a.id === annId);
       if (ann && ann.type === 'text') {
         annotationDragStartRef.current = { x: e.clientX, y: e.clientY, initialX: ann.x, initialY: ann.y };
+      } else if (ann && ann.type === 'rectangle') {
+        // For rectangles, we just select them, dragging is handled by vertex handles
+        setIsDraggingAnnotation(false);
       }
   };
   const handleAnnotationResizeMouseDown = (e: React.MouseEvent, annId: string) => {
@@ -288,9 +323,25 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       onUpdateAnnotations(layer.id, (layer.annotations || []).filter(a => a.id !== annId));
       setSelectedAnnotationId(null);
   };
+  const handleVertexMouseDown = (e: React.MouseEvent, annId: string, vertexIndex: number) => {
+      e.stopPropagation(); e.preventDefault();
+      setIsDraggingVertex(true);
+      setDraggingVertexIndex(vertexIndex);
+      setSelectedAnnotationId(annId);
+      const ann = layer.annotations?.find(a => a.id === annId);
+      if (ann && ann.type === 'rectangle') {
+          annotationDragStartRef.current = {
+              x: e.clientX,
+              y: e.clientY,
+              initialX: 0,
+              initialY: 0,
+              initialVertices: [...ann.vertices]
+          };
+      }
+  };
   useEffect(() => {
       const handleGlobalMouseMove = (e: MouseEvent) => {
-          if (!isDraggingAnnotation && !isResizingAnnotation) return;
+          if (!isDraggingAnnotation && !isResizingAnnotation && !isDraggingVertex) return;
           if (!selectedAnnotationId) return;
           const deltaX = (e.clientX - annotationDragStartRef.current.x) / scale;
           const deltaY = (e.clientY - annotationDragStartRef.current.y) / scale;
@@ -299,16 +350,28 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           } else if (isResizingAnnotation) {
               const newSize = Math.max(10, (annotationDragStartRef.current.initialSize || 24) + ((deltaX + deltaY) * 0.5));
               onUpdateAnnotations(layer.id, (layer.annotations || []).map(a => a.id === selectedAnnotationId && a.type === 'text' ? { ...a, fontSize: newSize } : a));
+          } else if (isDraggingVertex && draggingVertexIndex !== null && annotationDragStartRef.current.initialVertices) {
+              onUpdateAnnotations(layer.id, (layer.annotations || []).map(a => {
+                  if (a.id === selectedAnnotationId && a.type === 'rectangle') {
+                      const newVertices = [...annotationDragStartRef.current.initialVertices!];
+                      newVertices[draggingVertexIndex] = {
+                          x: annotationDragStartRef.current.initialVertices![draggingVertexIndex].x + deltaX,
+                          y: annotationDragStartRef.current.initialVertices![draggingVertexIndex].y + deltaY
+                      };
+                      return { ...a, vertices: newVertices };
+                  }
+                  return a;
+              }));
           }
       };
       const handleGlobalMouseUp = () => {
-          if (isDraggingAnnotation || isResizingAnnotation) {
-              setIsDraggingAnnotation(false); setIsResizingAnnotation(false); onDragEnd(layer.id);
+          if (isDraggingAnnotation || isResizingAnnotation || isDraggingVertex) {
+              setIsDraggingAnnotation(false); setIsResizingAnnotation(false); setIsDraggingVertex(false); setDraggingVertexIndex(null); onDragEnd(layer.id);
           }
       };
-      if (isDraggingAnnotation || isResizingAnnotation) { window.addEventListener('mousemove', handleGlobalMouseMove); window.addEventListener('mouseup', handleGlobalMouseUp); }
+      if (isDraggingAnnotation || isResizingAnnotation || isDraggingVertex) { window.addEventListener('mousemove', handleGlobalMouseMove); window.addEventListener('mouseup', handleGlobalMouseUp); }
       return () => { window.removeEventListener('mousemove', handleGlobalMouseMove); window.removeEventListener('mouseup', handleGlobalMouseUp); };
-  }, [isDraggingAnnotation, isResizingAnnotation, selectedAnnotationId, scale, layer.annotations, onUpdateAnnotations, onDragEnd, layer.id]);
+  }, [isDraggingAnnotation, isResizingAnnotation, isDraggingVertex, draggingVertexIndex, selectedAnnotationId, scale, layer.annotations, onUpdateAnnotations, onDragEnd, layer.id]);
 
   // ... [Canvas Drawing Handlers]
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
@@ -323,6 +386,11 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           if (!rect) return;
           if (textInput) commitText();
           setTextInput({ x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale, value: '' });
+      } else if (tool === 'rectangle') {
+          e.stopPropagation(); e.preventDefault();
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          setDrawingRect({ startX: (e.clientX - rect.left) / scale, startY: (e.clientY - rect.top) / scale });
       } else if (tool === 'cursor') {
           setSelectedAnnotationId(null);
       }
@@ -332,13 +400,53 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           const rect = canvasRef.current?.getBoundingClientRect();
           if (!rect) return;
           setDrawingPath(prev => [...prev, {x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale}]);
+      } else if (tool === 'rectangle' && drawingRect && drawingRect.startX !== undefined) {
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          setDrawingRect({
+              ...drawingRect,
+              endX: (e.clientX - rect.left) / scale,
+              endY: (e.clientY - rect.top) / scale
+          });
       }
   };
-  const handleCanvasMouseUp = () => {
+  const handleCanvasMouseUp = (e?: React.MouseEvent) => {
       if (tool === 'pencil' && drawingPath.length > 0) {
-          const newPath: Annotation = { id: crypto.randomUUID(), type: 'path', points: drawingPath, color: color, width: 3 };
+          const newPath: Annotation = { id: crypto.randomUUID(), type: 'path', points: drawingPath, color: color, width: strokeWidth };
           onUpdateAnnotations(layer.id, [...(layer.annotations || []), newPath]);
           onDragEnd(layer.id); setDrawingPath([]);
+      }
+      if (tool === 'rectangle' && drawingRect && e) {
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const endX = (e.clientX - rect.left) / scale;
+          const endY = (e.clientY - rect.top) / scale;
+          const minX = Math.min(drawingRect.startX, endX);
+          const minY = Math.min(drawingRect.startY, endY);
+          const maxX = Math.max(drawingRect.startX, endX);
+          const maxY = Math.max(drawingRect.startY, endY);
+
+          // Only create rectangle if it has some size
+          if (Math.abs(maxX - minX) > 5 && Math.abs(maxY - minY) > 5) {
+              const vertices = [
+                  { x: minX, y: minY },        // top-left
+                  { x: maxX, y: minY },        // top-right
+                  { x: maxX, y: maxY },        // bottom-right
+                  { x: minX, y: maxY }         // bottom-left
+              ];
+              const newRect: Annotation = {
+                  id: crypto.randomUUID(),
+                  type: 'rectangle',
+                  vertices,
+                  color: color,
+                  strokeWidth: strokeWidth
+              };
+              onUpdateAnnotations(layer.id, [...(layer.annotations || []), newRect]);
+              onDragEnd(layer.id);
+              setSelectedAnnotationId(newRect.id);
+              setTool('cursor');
+          }
+          setDrawingRect(null);
       }
   };
   const commitText = () => {
@@ -531,6 +639,12 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                   ctx.moveTo(ann.points[0].x, ann.points[0].y); for (let i = 1; i < ann.points.length; i++) ctx.lineTo(ann.points[i].x, ann.points[i].y); ctx.stroke();
               } else if (ann.type === 'text') {
                   ctx.fillStyle = ann.color; ctx.font = `bold ${ann.fontSize}px sans-serif`; ctx.textBaseline = 'top'; ctx.fillText(ann.text, ann.x, ann.y);
+              } else if (ann.type === 'rectangle') {
+                  if (ann.vertices.length !== 4) return;
+                  ctx.beginPath(); ctx.strokeStyle = ann.color; ctx.lineWidth = ann.strokeWidth; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                  ctx.moveTo(ann.vertices[0].x, ann.vertices[0].y);
+                  for (let i = 1; i < ann.vertices.length; i++) ctx.lineTo(ann.vertices[i].x, ann.vertices[i].y);
+                  ctx.closePath(); ctx.stroke();
               }
           });
       }
@@ -708,7 +822,31 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                   {/* Annotation Tools */}
                   <button onClick={() => setTool(tool === 'pencil' ? 'cursor' : 'pencil')} className={`p-1.5 rounded-md transition-colors ${tool === 'pencil' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Draw"><Pencil size={16} /></button>
                   <button onClick={() => setTool(tool === 'text' ? 'cursor' : 'text')} className={`p-1.5 rounded-md transition-colors ${tool === 'text' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Add Text Overlay"><TypeIcon size={16} /></button>
-                  
+                  <button onClick={() => setTool(tool === 'rectangle' ? 'cursor' : 'rectangle')} className={`p-1.5 rounded-md transition-colors ${tool === 'rectangle' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Draw Rectangle"><Square size={16} /></button>
+
+                  {(tool === 'pencil' || tool === 'rectangle' || tool === 'text') && (
+                    <div className="relative flex items-center gap-1 border-r border-white/10 pr-2 mr-1">
+                        <button onClick={() => setShowStrokePicker(!showStrokePicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/10 flex items-center gap-1 text-[10px] font-mono">
+                            <div className="w-0.5 rounded-full bg-gray-300" style={{ height: `${Math.min(strokeWidth * 2, 16)}px` }}></div>
+                            <span>{strokeWidth}px</span>
+                        </button>
+                        {showStrokePicker && (
+                            <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-surface border border-border p-2 rounded-lg flex flex-col gap-1 shadow-xl z-50 min-w-[80px]">
+                                {STROKE_WIDTHS.map(w => (
+                                    <button
+                                        key={w}
+                                        onClick={() => { setStrokeWidth(w); setShowStrokePicker(false); }}
+                                        className={`px-2 py-1.5 rounded text-xs hover:bg-white/10 flex items-center gap-2 ${strokeWidth === w ? 'bg-white/10 text-white' : 'text-gray-400'}`}
+                                    >
+                                        <div className="w-0.5 rounded-full bg-current" style={{ height: `${Math.min(w * 2, 16)}px` }}></div>
+                                        <span>{w}px</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                  )}
+
                   {showTextSizeTools && (
                     <div className="flex items-center gap-1 border-r border-white/10 pr-2 mr-1">
                         <button onClick={() => onUpdateFontSize?.(layer.id, -4)} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300" title="Decrease Font Size"><Minus size={12} /></button>
@@ -908,7 +1046,57 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
             );
         })}
 
-        <canvas ref={canvasRef} className="absolute inset-0 z-20 pointer-events-none" style={{ pointerEvents: tool !== 'cursor' ? 'auto' : 'none', cursor: tool === 'pencil' ? 'crosshair' : tool === 'text' ? 'text' : 'default' }} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} />
+        {/* Rectangle Annotations with Vertex Handles */}
+        {layer.annotations?.map(ann => {
+            if (ann.type !== 'rectangle') return null;
+            const isAnnSelected = selectedAnnotationId === ann.id;
+            return (
+                <div key={ann.id} className="absolute annotation-overlay pointer-events-none z-30" style={{ inset: 0 }}>
+                    {/* Clickable overlay for selection */}
+                    <svg
+                        className="absolute inset-0 w-full h-full pointer-events-auto"
+                        style={{ cursor: 'pointer' }}
+                        onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)}
+                    >
+                        <polygon
+                            points={ann.vertices.map(v => `${v.x},${v.y}`).join(' ')}
+                            fill="transparent"
+                            stroke="transparent"
+                            strokeWidth={ann.strokeWidth + 10}
+                        />
+                    </svg>
+                    {isAnnSelected && (
+                        <>
+                            {/* Delete button */}
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleDeleteAnnotation(ann.id); }}
+                                className="absolute bg-red-500 text-white rounded-full p-0.5 hover:bg-red-600 shadow-md pointer-events-auto z-50"
+                                style={{
+                                    left: ann.vertices[0].x - 6,
+                                    top: ann.vertices[0].y - 12
+                                }}
+                            >
+                                <X size={8} />
+                            </button>
+                            {/* Vertex handles */}
+                            {ann.vertices.map((vertex, idx) => (
+                                <div
+                                    key={idx}
+                                    onMouseDown={(e) => handleVertexMouseDown(e, ann.id, idx)}
+                                    className="absolute w-3 h-3 bg-white border-2 border-primary rounded-full cursor-move z-50 hover:scale-125 shadow-md pointer-events-auto transition-transform"
+                                    style={{
+                                        left: vertex.x - 6,
+                                        top: vertex.y - 6
+                                    }}
+                                />
+                            ))}
+                        </>
+                    )}
+                </div>
+            );
+        })}
+
+        <canvas ref={canvasRef} className="absolute inset-0 z-20 pointer-events-none" style={{ pointerEvents: tool !== 'cursor' ? 'auto' : 'none', cursor: tool === 'pencil' ? 'crosshair' : tool === 'text' ? 'text' : tool === 'rectangle' ? 'crosshair' : 'default' }} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} />
         {textInput && (
             <input ref={textInputRef} type="text" autoFocus value={textInput.value} onChange={(e) => setTextInput({...textInput, value: e.target.value})} onKeyDown={(e) => { if(e.key === 'Enter') { e.preventDefault(); commitText(); } }} onBlur={commitText} onMouseDown={(e) => e.stopPropagation()} className="absolute z-30 bg-black/50 text-white border border-primary px-2 py-1 rounded outline-none shadow-lg" style={{ left: textInput.x, top: textInput.y, color: color, fontSize: '24px', fontWeight: 'bold', minWidth: '50px' }} />
         )}

@@ -62,7 +62,15 @@ export interface TextAnnotation {
     fontSize: number;
 }
 
-export type Annotation = DrawingPath | TextAnnotation;
+export interface RectangleAnnotation {
+    id: string;
+    type: 'rectangle';
+    vertices: {x: number, y: number}[]; // 4 vertices: [topLeft, topRight, bottomRight, bottomLeft]
+    color: string;
+    strokeWidth: number;
+}
+
+export type Annotation = DrawingPath | TextAnnotation | RectangleAnnotation;
 
 export interface LayerData {
   id: string;
