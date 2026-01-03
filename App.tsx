@@ -54,20 +54,20 @@ const App: React.FC = () => {
   const fileDropRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Cancel a generation task
+  // Cancel a generation task (also handles disconnected/orphaned generations)
   const cancelGeneration = useCallback((layerId: string) => {
     const task = generationTasks.get(layerId);
     if (task) {
       task.abortController.abort();
-      // Remove the placeholder layer
-      setLayers(prev => prev.filter(l => l.id !== layerId));
-      // Remove the task
-      setGenerationTasks(prev => {
-        const next = new Map(prev);
-        next.delete(layerId);
-        return next;
-      });
     }
+    // Always remove the layer when cancel is clicked (handles disconnected generations)
+    setLayers(prev => prev.filter(l => l.id !== layerId));
+    // Always clean up the task from map
+    setGenerationTasks(prev => {
+      const next = new Map(prev);
+      next.delete(layerId);
+      return next;
+    });
   }, [generationTasks]);
 
   // Update task progress
@@ -698,6 +698,91 @@ const App: React.FC = () => {
 
   const deleteLayer = useCallback((id: string) => { setLayers(prev => { const next = prev.filter(l => l.id !== id); addToHistory(next); return next; }); if (selectedLayerId === id) setSelectedLayerId(null); }, [selectedLayerId, addToHistory]);
   const duplicateLayer = useCallback((id: string) => { setLayers(prev => { const layer = prev.find(l => l.id === id); if (!layer) return prev; const newLayer: LayerData = { ...layer, id: crypto.randomUUID(), x: layer.x + 20, y: layer.y + 20, title: `${layer.title} (Copy)`, createdAt: Date.now() }; const next = [...prev, newLayer]; addToHistory(next); setSelectedLayerId(newLayer.id); return next; }); }, [addToHistory]);
+  const exportLayer = useCallback(async (id: string, format: 'png' | 'jpg' | 'mp4' | 'wav') => {
+    const layer = layers.find(l => l.id === id);
+    if (!layer || !layer.src) return;
+
+    try {
+      let exportUrl = layer.src;
+      const filename = `${(layer.title || 'export').replace(/\s+/g, '_')}.${format}`;
+
+      // For video/audio, just download directly
+      if (layer.type === 'video' || layer.type === 'audio') {
+        const link = document.createElement('a');
+        link.download = filename;
+        link.href = exportUrl;
+        link.click();
+        return;
+      }
+
+      // For images with annotations, composite them
+      if (layer.annotations && layer.annotations.length > 0) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = layer.src;
+        await new Promise(r => img.onload = r);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          // Draw annotations (simplified - text and rectangles)
+          for (const ann of layer.annotations) {
+            ctx.strokeStyle = ann.color || '#ffffff';
+            ctx.fillStyle = ann.color || '#ffffff';
+            ctx.lineWidth = ann.strokeWidth || 2;
+            if (ann.type === 'text' && ann.text) {
+              ctx.font = `${ann.fontSize || 24}px sans-serif`;
+              ctx.fillText(ann.text, ann.points[0].x, ann.points[0].y);
+            } else if (ann.type === 'rectangle' && ann.points.length >= 4) {
+              ctx.beginPath();
+              ctx.moveTo(ann.points[0].x, ann.points[0].y);
+              for (let i = 1; i < ann.points.length; i++) {
+                ctx.lineTo(ann.points[i].x, ann.points[i].y);
+              }
+              ctx.closePath();
+              ctx.stroke();
+            } else if (ann.type === 'pencil' && ann.points.length > 1) {
+              ctx.beginPath();
+              ctx.moveTo(ann.points[0].x, ann.points[0].y);
+              for (let i = 1; i < ann.points.length; i++) {
+                ctx.lineTo(ann.points[i].x, ann.points[i].y);
+              }
+              ctx.stroke();
+            }
+          }
+          exportUrl = canvas.toDataURL(format === 'jpg' ? 'image/jpeg' : 'image/png', 0.9);
+        }
+      }
+
+      // Convert to JPG if needed (with white background)
+      if (format === 'jpg' && !exportUrl.startsWith('data:image/jpeg')) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = exportUrl;
+        await new Promise(r => img.onload = r);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          exportUrl = canvas.toDataURL('image/jpeg', 0.9);
+        }
+      }
+
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = exportUrl;
+      link.click();
+    } catch (error) {
+      console.error('Export failed:', error);
+    }
+  }, [layers]);
   const renameLayer = useCallback((id: string, newTitle: string) => { setLayers(prev => { const next = prev.map(l => l.id === id ? { ...l, title: newTitle } : l); addToHistory(next); return next; }); }, [addToHistory]);
   const flipLayer = useCallback((id: string, axis: 'x' | 'y') => { setLayers(prev => { const next = prev.map(l => l.id !== id ? l : { ...l, flipX: axis === 'x' ? !l.flipX : l.flipX, flipY: axis === 'y' ? !l.flipY : l.flipY }); addToHistory(next); return next; }); }, [addToHistory]);
   const handleAddAsReference = useCallback((layerId: string) => { const layer = layers.find(l => l.id === layerId); if (!layer || layer.type === 'video') return; const newAttachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: layer.src }; setGlobalAttachments(prev => [...prev, newAttachment]); setSelectedLayerId(null); setTimeout(() => promptInputRef.current?.focus(), 50); }, [layers]);
@@ -864,7 +949,7 @@ const App: React.FC = () => {
         onViewportChange={setCanvasOffset}
       />
 
-      <Sidebar isOpen={isSidebarOpen} onToggle={() => setIsSidebarOpen(!isSidebarOpen)} layers={layers} selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} onRenameLayer={renameLayer} onLayerDoubleClick={handleLayerFocus} />
+      <Sidebar isOpen={isSidebarOpen} onToggle={() => setIsSidebarOpen(!isSidebarOpen)} layers={layers} selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} onRenameLayer={renameLayer} onLayerDoubleClick={handleLayerFocus} onDeleteLayer={deleteLayer} onExportLayer={exportLayer} onDuplicateLayer={duplicateLayer} />
     </div>
   );
 };
