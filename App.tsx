@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { LayerData, ModelId, Attachment, MediaType, VideoMode, Annotation } from './types';
-import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle } from './services/geminiService';
+import { LayerData, ModelId, Attachment, MediaType, VideoMode, Annotation, GenerationTask } from './types';
+import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle, GenerationCallbacks } from './services/geminiService';
 import { saveLayers, loadLayers, saveViewState, loadViewState, saveHistory, loadHistory, clearAllData } from './services/storageService';
 import { generateThumbnail } from './services/thumbnailService';
 import PromptBar from './components/PromptBar';
@@ -36,12 +36,15 @@ const App: React.FC = () => {
   const [historyIndex, setHistoryIndex] = useState(0);
 
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  // Generation task management for non-blocking UI
+  const [generationTasks, setGenerationTasks] = useState<Map<string, GenerationTask>>(new Map());
+  const hasActiveGenerations = generationTasks.size > 0;
+
   const [canvasOffset, setCanvasOffset] = useState({ x: 0, y: 0 });
-  const [scale, setScale] = useState(0.6); // Zoomed out more for the larger template
+  const [scale, setScale] = useState(0.6);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [globalAttachments, setGlobalAttachments] = useState<Attachment[]>([]);
-  
+
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectionTarget, setSelectionTarget] = useState<'global' | 'layer' | null>(null);
   const [injectedAttachment, setInjectedAttachment] = useState<Attachment | null>(null);
@@ -50,6 +53,38 @@ const App: React.FC = () => {
 
   const fileDropRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Cancel a generation task
+  const cancelGeneration = useCallback((layerId: string) => {
+    const task = generationTasks.get(layerId);
+    if (task) {
+      task.abortController.abort();
+      // Remove the placeholder layer
+      setLayers(prev => prev.filter(l => l.id !== layerId));
+      // Remove the task
+      setGenerationTasks(prev => {
+        const next = new Map(prev);
+        next.delete(layerId);
+        return next;
+      });
+    }
+  }, [generationTasks]);
+
+  // Update task progress
+  const updateTaskProgress = useCallback((layerId: string, progress: number) => {
+    setGenerationTasks(prev => {
+      const task = prev.get(layerId);
+      if (!task) return prev;
+      const next = new Map(prev);
+      next.set(layerId, { ...task, progress });
+      return next;
+    });
+  }, []);
+
+  // Get task for a layer
+  const getTaskForLayer = useCallback((layerId: string) => {
+    return generationTasks.get(layerId);
+  }, [generationTasks]);
 
   const addToHistory = useCallback((newLayers: LayerData[]) => {
       setHistory(prev => {
@@ -242,16 +277,15 @@ const App: React.FC = () => {
 
   // --- Generation Handlers ---
   const handleGlobalGenerate = async (prompt: string, attachments: Attachment[], model: ModelId, aspectRatio: string, creativity: number, imageSize: string, resolution: '720p' | '1080p', mediaType: MediaType, duration: string, videoMode: VideoMode, startImageIndex?: number, count: number = 1, voice?: string) => {
-    setIsGenerating(true);
     const requestCount = mediaType === 'video' || mediaType === 'audio' ? 1 : count;
     const allBase64s = attachments.map(a => a.base64);
     let finalAspectRatio = aspectRatio;
     if (finalAspectRatio === 'Auto') {
         if (mediaType === 'video') finalAspectRatio = '16:9';
-        else if (attachments.length > 0) { try { const dim = await getImageDimensions(attachments[0].base64); finalAspectRatio = getClosestAspectRatio(dim.width, dim.height); } catch (e) { finalAspectRatio = '1:1'; } } 
+        else if (attachments.length > 0) { try { const dim = await getImageDimensions(attachments[0].base64); finalAspectRatio = getClosestAspectRatio(dim.width, dim.height); } catch (e) { finalAspectRatio = '1:1'; } }
         else finalAspectRatio = '1:1';
     }
-    
+
     let width = 400, height = 400;
     if (mediaType === 'audio') { width = 300; height = 120; }
     else { const dim = getDimensionsFromAspectRatio(finalAspectRatio); width = dim.width; height = dim.height; }
@@ -264,17 +298,42 @@ const App: React.FC = () => {
     const startY = centerY - ((Math.ceil(requestCount/cols) * height + (Math.ceil(requestCount/cols) - 1) * gap) / 2);
 
     const placeholders: LayerData[] = [];
+    const newTasks = new Map<string, GenerationTask>();
+
     for (let i = 0; i < requestCount; i++) {
         const row = Math.floor(i / cols); const col = i % cols;
+        const layerId = crypto.randomUUID();
+        const abortController = new AbortController();
+
         placeholders.push({
-            id: crypto.randomUUID(), type: mediaType, x: startX + col * (width + gap), y: startY + row * (height + gap), width, height, src: '', promptUsed: prompt, referenceImages: allBase64s, title: "Generating...", createdAt: Date.now(), isLoading: true,
+            id: layerId, type: mediaType, x: startX + col * (width + gap), y: startY + row * (height + gap), width, height, src: '', promptUsed: prompt, referenceImages: allBase64s, title: "Generating...", createdAt: Date.now(), isLoading: true,
             generationMetadata: { model, aspectRatio: finalAspectRatio, creativity, imageSize, resolution, duration, videoMode, voice }
         });
+
+        newTasks.set(layerId, {
+            id: crypto.randomUUID(),
+            layerId,
+            status: 'generating',
+            abortController,
+            mediaType,
+            startedAt: Date.now(),
+            progress: 0
+        });
     }
+
     setLayers(prev => [...prev, ...placeholders]);
-    
-    // Generate all images in parallel (up to 4 concurrent requests)
+    setGenerationTasks(prev => new Map([...prev, ...newTasks]));
+
+    // Generate all in parallel with cancellation support
     await Promise.all(placeholders.map(async (placeholder) => {
+        const task = newTasks.get(placeholder.id);
+        if (!task) return;
+
+        const callbacks: GenerationCallbacks = {
+            signal: task.abortController.signal,
+            onProgress: (progress) => updateTaskProgress(placeholder.id, progress)
+        };
+
         try {
             let result; let title = prompt.substring(0, 30);
             if (mediaType === 'video') {
@@ -282,60 +341,87 @@ const App: React.FC = () => {
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }), generateLayerTitle(prompt) ]);
+                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks), generateLayerTitle(prompt) ]);
                  result = videoRes; title = genTitle;
             } else if (mediaType === 'audio') {
-                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }), generateLayerTitle(prompt) ]);
+                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }, callbacks), generateLayerTitle(prompt) ]);
                  result = audioRes; title = genTitle;
             } else {
-                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }), generateLayerTitle(prompt) ]);
+                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
                 result = imageRes; title = genTitle;
             }
-            // Generate thumbnail for images (not videos/audio)
+            // Generate thumbnail for images
             let thumbnail: string | undefined;
             if (mediaType === 'image' && result.url) {
                 try { thumbnail = await generateThumbnail(result.url); } catch (e) { console.warn('Thumbnail generation failed:', e); }
             }
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: result.url, thumbnail, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            // Remove completed task
+            setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         } catch (error: any) {
+            if (error.name === 'AbortError') {
+                // Cancelled - layer already removed by cancelGeneration
+                return;
+            }
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
+            setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
     }));
-    setLayers(current => { addToHistory(current); return current; }); setIsGenerating(false); setIsSidebarOpen(true);
+    setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true);
   };
 
   const handleLayerGenerate = async (originalLayerId: string, prompt: string, attachments: Attachment[], model: ModelId, aspectRatio: string, creativity: number, imageSize: string, resolution: '720p' | '1080p', mediaType: MediaType, duration: string, videoMode: VideoMode, startImageIndex?: number, count: number = 1, voice?: string) => {
-    setIsGenerating(true);
     const original = layers.find(l => l.id === originalLayerId);
-    if (!original) { setIsGenerating(false); return; }
+    if (!original) return;
     const requestCount = mediaType === 'video' || mediaType === 'audio' ? 1 : count;
     let finalAspectRatio = aspectRatio === 'Auto' ? (mediaType === 'video' ? '16:9' : resolveAspectRatio(aspectRatio, original)) : aspectRatio;
-    
+
     let width = 400, height = 400;
     if (mediaType === 'audio') { width = 300; height = 120; }
     else { const dim = getDimensionsFromAspectRatio(finalAspectRatio); width = dim.width; height = dim.height; }
 
-    // If generating from a placeholder template, use its exact position
     const isPlaceholder = original.src === PLACEHOLDER_SRC;
     const pos = isPlaceholder ? { x: original.x, y: original.y } : findSmartPosition(original, width, height, layers);
 
     const gap = 20; const cols = Math.ceil(Math.sqrt(requestCount));
-    
+
     const placeholders: LayerData[] = [];
+    const newTasks = new Map<string, GenerationTask>();
+
     for (let i = 0; i < requestCount; i++) {
         const row = Math.floor(i / cols); const col = i % cols;
-        placeholders.push({ id: crypto.randomUUID(), type: mediaType, x: pos.x + col * (width + gap), y: pos.y + row * (height + gap), width, height, src: '', promptUsed: prompt, referenceImages: attachments.map(a => a.base64), title: "Remixing...", createdAt: Date.now(), isLoading: true, generationMetadata: { model, aspectRatio: finalAspectRatio, creativity, imageSize, resolution, duration, videoMode, voice } });
+        const layerId = crypto.randomUUID();
+        const abortController = new AbortController();
+
+        placeholders.push({ id: layerId, type: mediaType, x: pos.x + col * (width + gap), y: pos.y + row * (height + gap), width, height, src: '', promptUsed: prompt, referenceImages: attachments.map(a => a.base64), title: "Remixing...", createdAt: Date.now(), isLoading: true, generationMetadata: { model, aspectRatio: finalAspectRatio, creativity, imageSize, resolution, duration, videoMode, voice } });
+
+        newTasks.set(layerId, {
+            id: crypto.randomUUID(),
+            layerId,
+            status: 'generating',
+            abortController,
+            mediaType,
+            startedAt: Date.now(),
+            progress: 0
+        });
     }
-    
-    // If we are replacing a placeholder, remove it from the list before adding new ones
+
     if (isPlaceholder) {
         setLayers(prev => [...prev.filter(l => l.id !== originalLayerId), ...placeholders]);
     } else {
         setLayers(prev => [...prev, ...placeholders]);
     }
+    setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 
-    // Generate all images in parallel (up to 4 concurrent requests)
     await Promise.all(placeholders.map(async (placeholder, idx) => {
+        const task = newTasks.get(placeholder.id);
+        if (!task) return;
+
+        const callbacks: GenerationCallbacks = {
+            signal: task.abortController.signal,
+            onProgress: (progress) => updateTaskProgress(placeholder.id, progress)
+        };
+
         try {
             const allBase64s = attachments.map(a => a.base64); let result; let title = "Remix";
             if (mediaType === 'video') {
@@ -343,44 +429,77 @@ const App: React.FC = () => {
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }), generateLayerTitle(prompt) ]);
+                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks), generateLayerTitle(prompt) ]);
                  result = videoRes; title = genTitle;
             } else if (mediaType === 'audio') {
-                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }), generateLayerTitle(prompt) ]);
+                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }, callbacks), generateLayerTitle(prompt) ]);
                  result = audioRes; title = genTitle;
             } else {
-                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }), generateLayerTitle(prompt) ]);
+                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
                 result = imageRes; title = genTitle;
             }
-            // Generate thumbnail for images (not videos/audio)
             let thumbnail: string | undefined;
             if (mediaType === 'image' && result.url) {
                 try { thumbnail = await generateThumbnail(result.url); } catch (e) { console.warn('Thumbnail generation failed:', e); }
             }
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: result.url, thumbnail, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
             if (requestCount === 1 && idx === 0) setSelectedLayerId(placeholder.id);
-        } catch (error: any) { setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" })); }
+        } catch (error: any) {
+            if (error.name === 'AbortError') return;
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
+            setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
+        }
     }));
-    setLayers(current => { addToHistory(current); return current; }); setIsGenerating(false); setIsSidebarOpen(true);
+    setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true);
   };
 
   const handleExtendVideo = async (layerId: string, prompt: string) => {
-      setIsGenerating(true); const original = layers.find(l => l.id === layerId); if (!original) { setIsGenerating(false); return; }
+      const original = layers.find(l => l.id === layerId);
+      if (!original) return;
+
       let inputVideoMetadata = original.videoMetadata;
       if (!inputVideoMetadata && original.src) {
             const src = original.src; const parts = src.split(','); const base64Data = parts[1] || src; let mimeType = 'video/mp4'; const match = src.match(/data:([^;]+);base64,/); if (match) mimeType = match[1];
             inputVideoMetadata = { videoBytes: base64Data, mimeType: mimeType };
       }
-      if (!inputVideoMetadata) { alert("Cannot extend this layer."); setIsGenerating(false); return; }
+      if (!inputVideoMetadata) { alert("Cannot extend this layer."); return; }
+
       const pos = findSmartPosition(original, original.width, original.height, layers);
-      const placeholder: LayerData = { id: crypto.randomUUID(), type: 'video', x: pos.x, y: pos.y, width: original.width, height: original.height, src: '', promptUsed: prompt, referenceImages: [], title: "Extending...", createdAt: Date.now(), isLoading: true };
+      const placeholderId = crypto.randomUUID();
+      const abortController = new AbortController();
+
+      const placeholder: LayerData = { id: placeholderId, type: 'video', x: pos.x, y: pos.y, width: original.width, height: original.height, src: '', promptUsed: prompt, referenceImages: [], title: "Extending...", createdAt: Date.now(), isLoading: true };
+
+      const task: GenerationTask = {
+          id: crypto.randomUUID(),
+          layerId: placeholderId,
+          status: 'generating',
+          abortController,
+          mediaType: 'video',
+          startedAt: Date.now(),
+          progress: 0
+      };
+
       setLayers(prev => [...prev, placeholder]);
+      setGenerationTasks(prev => new Map([...prev, [placeholderId, task]]));
+
+      const callbacks: GenerationCallbacks = {
+          signal: abortController.signal,
+          onProgress: (progress) => updateTaskProgress(placeholderId, progress)
+      };
+
       try {
-            const [videoResult, title] = await Promise.all([ generateVideoContent({ prompt: prompt, model: ModelId.VEO_3_1_HIGH, mediaType: 'video', inputVideoMetadata: inputVideoMetadata, resolution: '720p', aspectRatio: '16:9' }), generateLayerTitle(prompt) ]);
+            const [videoResult, title] = await Promise.all([ generateVideoContent({ prompt: prompt, model: ModelId.VEO_3_1_HIGH, mediaType: 'video', inputVideoMetadata: inputVideoMetadata, resolution: '720p', aspectRatio: '16:9' }, callbacks), generateLayerTitle(prompt) ]);
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: videoResult.url, title: title + " (Ext)", videoMetadata: videoResult.metadata, generationMetadata: videoResult.generationConfig, isLoading: false, duration: 8 }));
+            setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholderId); return next; });
             setSelectedLayerId(placeholder.id);
-      } catch (error: any) { setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Extension failed" })); } 
-      finally { setLayers(current => { addToHistory(current); return current; }); setIsGenerating(false); setIsSidebarOpen(true); }
+      } catch (error: any) {
+            if (error.name === 'AbortError') return;
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Extension failed" }));
+            setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholderId); return next; });
+      }
+      finally { setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true); }
   };
 
   const handleRemoveBackground = async (layerId: string) => {
@@ -643,18 +762,25 @@ const App: React.FC = () => {
       {isSelectionMode && <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[60] bg-primary text-white px-6 py-2 rounded-full shadow-lg font-bold animate-pulse pointer-events-none">Click a layer to select it as reference</div>}
 
       <div className={`flex-1 relative overflow-hidden ${isPanning ? 'cursor-grabbing' : ''}`} style={{ touchAction: 'none' }} onDrop={handleDrop} onDragOver={handleDragOver} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} onWheel={handleWheel} ref={fileDropRef}>
-        <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#3f3f46 1px, transparent 1px)', backgroundSize: `${20 * scale}px ${20 * scale}px`, backgroundPosition: `${canvasOffset.x}px ${canvasOffset.y}px` }} />
-        {layers.length === 0 && !isGenerating && (
+        {/* Canvas grid - warm tint */}
+        <div className="absolute inset-0 opacity-15 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#2a2520 1px, transparent 1px)', backgroundSize: `${20 * scale}px ${20 * scale}px`, backgroundPosition: `${canvasOffset.x}px ${canvasOffset.y}px` }} />
+        {layers.length === 0 && !hasActiveGenerations && (
              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="text-center space-y-4 opacity-40">
-                    <div className="bg-surface p-6 rounded-3xl border border-border inline-block"><ImageIcon size={48} className="mx-auto mb-4 text-gray-500" /><h2 className="text-2xl font-bold text-gray-200">AI Canvas</h2><p className="text-gray-400 max-w-sm mt-2">Drag & drop images or videos,<br/>or use the prompt bar to generate with AI.</p></div>
+                <div className="text-center space-y-4 opacity-50 animate-fade-in-up">
+                    <div className="bg-elevated/80 backdrop-blur-xl p-8 rounded-3xl border border-border/50 shadow-2xl shadow-black/30 inline-block">
+                        <div className="w-16 h-16 mx-auto mb-6 rounded-2xl bg-primary/10 flex items-center justify-center">
+                            <ImageIcon size={32} className="text-primary" />
+                        </div>
+                        <h2 className="text-2xl font-display font-bold text-text-primary">AI Canvas</h2>
+                        <p className="text-text-secondary max-w-sm mt-3 leading-relaxed">Drag & drop images or videos,<br/>or use the prompt bar to generate with AI.</p>
+                    </div>
                 </div>
              </div>
         )}
         <div style={{ transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '100%', height: '100%', pointerEvents: 'none' }} className="absolute top-0 left-0">
             {layers.map(layer => (
             <div key={layer.id} className="pointer-events-auto">
-                 <CanvasLayer 
+                 <CanvasLayer
                     layer={layer}
                     isSelected={selectedLayerId === layer.id}
                     scale={scale}
@@ -675,54 +801,59 @@ const App: React.FC = () => {
                     onRemoveBackground={handleRemoveBackground}
                     onExtendVideo={handleExtendVideo}
                     onReorder={reorderLayer}
-                    isGenerating={isGenerating}
+                    isGenerating={hasActiveGenerations}
+                    generationTask={getTaskForLayer(layer.id)}
+                    onCancelGeneration={() => cancelGeneration(layer.id)}
                     onSelectOnCanvasStart={() => startCanvasSelection('layer')}
                     injectedAttachment={selectedLayerId === layer.id ? injectedAttachment : null}
                 />
             </div>
             ))}
             
-            {/* Snap Lines */}
+            {/* Snap Lines - Warm Ember amber */}
             {snapLines?.vertical !== undefined && (
-                <div className="absolute top-[-10000px] bottom-[-10000px] w-px border-l border-dashed border-blue-500 z-[100]" style={{ left: snapLines.vertical }}></div>
+                <div className="absolute top-[-10000px] bottom-[-10000px] w-px border-l border-dashed border-primary z-[100]" style={{ left: snapLines.vertical }}></div>
             )}
             {snapLines?.horizontal !== undefined && (
-                <div className="absolute left-[-10000px] right-[-10000px] h-px border-t border-dashed border-blue-500 z-[100]" style={{ top: snapLines.horizontal }}></div>
+                <div className="absolute left-[-10000px] right-[-10000px] h-px border-t border-dashed border-primary z-[100]" style={{ top: snapLines.horizontal }}></div>
             )}
         </div>
       </div>
 
       {selectedLayerId === null && (
           <div className="absolute bottom-8 left-0 right-0 px-4 z-50 pointer-events-none transition-all duration-300" style={{ marginLeft: isSidebarOpen ? 320 : 0 }}>
-             <div className="pointer-events-auto"><PromptBar onSubmit={handleGlobalGenerate} isGenerating={isGenerating} variant="global" attachments={globalAttachments} onAttachmentsChange={setGlobalAttachments} onSelectOnCanvasStart={() => startCanvasSelection('global')} inputRef={promptInputRef} /></div>
+             <div className="pointer-events-auto"><PromptBar onSubmit={handleGlobalGenerate} isGenerating={hasActiveGenerations} variant="global" attachments={globalAttachments} onAttachmentsChange={setGlobalAttachments} onSelectOnCanvasStart={() => startCanvasSelection('global')} inputRef={promptInputRef} /></div>
           </div>
       )}
       
-      {/* Center-top branding */}
+      {/* Center-top branding - Warm Ember */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
-         <div className="bg-surface/50 backdrop-blur border border-border/50 px-3 py-1.5 rounded-full text-xs text-gray-400 font-medium flex items-center gap-4 shadow-lg">
-             <span>AI Canvas</span><span className="w-px h-3 bg-white/10"></span><span className="flex items-center gap-1"><MousePointer2 size={12}/> Select</span><span className="flex items-center gap-1"><span className="border border-gray-500 rounded px-1 text-[10px]">Shift</span> + Drag to Pan</span>
+         <div className="bg-elevated/70 backdrop-blur-xl border border-border/50 px-4 py-2 rounded-full text-xs font-medium flex items-center gap-4 shadow-xl shadow-black/30">
+             <span className="font-display font-semibold text-primary">AI Canvas</span>
+             <span className="w-px h-3 bg-border"></span>
+             <span className="flex items-center gap-1.5 text-text-secondary"><MousePointer2 size={12}/> Select</span>
+             <span className="flex items-center gap-1.5 text-text-secondary"><span className="border border-border rounded px-1.5 py-0.5 text-[10px] bg-surface/50">Shift</span> + Drag to Pan</span>
          </div>
       </div>
 
-      {/* Right-side Toolbar with Undo/Redo */}
-      <div className="absolute top-4 right-4 z-50 pointer-events-auto bg-surface/80 backdrop-blur border border-border rounded-lg shadow-xl p-1.5 flex flex-col gap-1 w-10">
-         <button onClick={undo} disabled={historyIndex === 0} className={`p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors ${historyIndex === 0 ? 'opacity-50 cursor-not-allowed' : ''}`} title="Undo (Ctrl+Z)"><Undo2 size={20} /></button>
-         <button onClick={redo} disabled={historyIndex === history.length - 1} className={`p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors ${historyIndex === history.length - 1 ? 'opacity-50 cursor-not-allowed' : ''}`} title="Redo (Ctrl+Shift+Z)"><Redo2 size={20} /></button>
-         <div className="w-full h-px bg-white/10 my-0.5"></div>
-         <button onClick={createSticky} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Sticky Note"><StickyNote size={20} /></button>
-         <button onClick={createTextLayer} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Text Layer"><TypeIcon size={20} /></button>
-         <button onClick={createGroup} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Group Frame"><BoxSelect size={20} /></button>
-         <button onClick={createDrawingLayer} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 hover:text-white transition-colors" title="Add Drawing Layer"><Pencil size={20} /></button>
-         <div className="w-full h-px bg-white/10 my-0.5"></div>
-         <button onClick={handleClearCanvas} className="p-1.5 hover:bg-red-500/20 rounded-md text-red-400 hover:text-red-300 transition-colors" title="Clear Canvas"><Trash2 size={20} /></button>
+      {/* Right-side Toolbar - Warm Ember enhanced glassmorphism */}
+      <div className="absolute top-4 right-4 z-50 pointer-events-auto bg-elevated/70 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl shadow-black/40 p-2 flex flex-col gap-1.5 w-11">
+         <button onClick={undo} disabled={historyIndex === 0} className={`p-2 rounded-lg text-text-secondary transition-all duration-200 ${historyIndex === 0 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-primary/10 hover:text-primary hover:scale-105'}`} title="Undo (Ctrl+Z)"><Undo2 size={18} /></button>
+         <button onClick={redo} disabled={historyIndex === history.length - 1} className={`p-2 rounded-lg text-text-secondary transition-all duration-200 ${historyIndex === history.length - 1 ? 'opacity-30 cursor-not-allowed' : 'hover:bg-primary/10 hover:text-primary hover:scale-105'}`} title="Redo (Ctrl+Shift+Z)"><Redo2 size={18} /></button>
+         <div className="w-full h-px bg-border my-1"></div>
+         <button onClick={createSticky} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary hover:scale-105 transition-all duration-200" title="Add Sticky Note"><StickyNote size={18} /></button>
+         <button onClick={createTextLayer} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary hover:scale-105 transition-all duration-200" title="Add Text Layer"><TypeIcon size={18} /></button>
+         <button onClick={createGroup} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary hover:scale-105 transition-all duration-200" title="Add Group Frame"><BoxSelect size={18} /></button>
+         <button onClick={createDrawingLayer} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary hover:scale-105 transition-all duration-200" title="Add Drawing Layer"><Pencil size={18} /></button>
+         <div className="w-full h-px bg-border my-1"></div>
+         <button onClick={handleClearCanvas} className="p-2 rounded-lg text-red-400/80 hover:bg-red-500/20 hover:text-red-400 hover:scale-105 transition-all duration-200" title="Clear Canvas"><Trash2 size={18} /></button>
       </div>
 
-      {/* Zoom controls - above minimap */}
-      <div className="absolute bottom-52 right-4 z-50 pointer-events-auto bg-surface/80 backdrop-blur border border-border rounded-lg shadow-lg flex flex-col p-1 gap-1">
-            <button onClick={zoomIn} className="p-2 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Zoom In"><ZoomIn size={18} /></button>
-            <div className="text-[10px] text-center font-mono text-gray-500 py-1 border-y border-white/5">{Math.round(scale * 100)}%</div>
-            <button onClick={zoomOut} className="p-2 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Zoom Out"><ZoomOut size={18} /></button>
+      {/* Zoom controls - Warm Ember */}
+      <div className="absolute bottom-52 right-4 z-50 pointer-events-auto bg-elevated/70 backdrop-blur-xl border border-border/50 rounded-xl shadow-xl shadow-black/30 flex flex-col p-1.5 gap-1">
+            <button onClick={zoomIn} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary transition-all duration-200" title="Zoom In"><ZoomIn size={18} /></button>
+            <div className="text-[10px] text-center font-mono text-text-secondary py-1.5 border-y border-border/50">{Math.round(scale * 100)}%</div>
+            <button onClick={zoomOut} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary transition-all duration-200" title="Zoom Out"><ZoomOut size={18} /></button>
       </div>
 
       <Minimap

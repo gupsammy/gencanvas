@@ -21,30 +21,32 @@ export const DEFAULT_MODEL = ModelId.GEMINI_2_5_FLASH_IMAGE;
 
 export const INITIAL_CANVAS_OFFSET = { x: 0, y: 0 };
 
+// Warm Ember harmonized color palettes
 export const STICKY_COLORS = [
-  '#fff8c5', // classic yellow
-  '#ffc5c5', // pink
-  '#c5f0ff', // blue
-  '#c5ffc8', // green
-  '#eec5ff', // purple
-  '#ffffff', // white
-  '#18181b', // dark
+  '#fef3c7', // warm cream
+  '#fecaca', // soft coral
+  '#d1fae5', // mint
+  '#e0e7ff', // soft lavender
+  '#fce7f3', // blush pink
+  '#fafaf9', // warm white
+  '#1c1916', // warm dark
 ];
 
 export const GROUP_COLORS = [
-  '#3f3f46', // zinc
-  '#3b82f6', // blue
+  '#2a2520', // warm gray (matches border)
+  '#f59e0b', // amber (primary)
   '#ef4444', // red
   '#10b981', // green
-  '#f59e0b', // amber
+  '#6366f1', // indigo
 ];
 
+// Minimap colors - warmer tones
 export const MINIMAP_LAYER_COLORS: Record<string, string> = {
-  image: '#3b82f6',     // Blue
+  image: '#f59e0b',     // Amber (primary)
   video: '#8b5cf6',     // Purple
   audio: '#10b981',     // Green
-  sticky: '#eab308',    // Yellow
-  group: 'rgba(113, 113, 122, 0.5)', // Gray semi-transparent
-  drawing: '#ec4899',   // Pink
-  text: '#f5f5f5',      // Off-white
+  sticky: '#fbbf24',    // Light amber
+  group: 'rgba(42, 37, 32, 0.5)', // Warm gray semi-transparent
+  drawing: '#f472b6',   // Pink
+  text: '#fafaf9',      // Warm white
 };

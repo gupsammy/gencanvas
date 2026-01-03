@@ -353,18 +353,24 @@ const PromptBar: React.FC<PromptBarProps> = ({
   };
 
   const isGlobal = variant === 'global';
-  const containerClasses = isGlobal
-    ? "bg-surface/90 backdrop-blur-md border border-border p-3 rounded-2xl shadow-2xl w-full max-w-2xl mx-auto relative"
-    : "bg-surface/95 backdrop-blur-xl border border-border p-3 rounded-xl shadow-xl w-[600px] relative";
 
   return (
-    <div className={containerClasses}>
-      {/* Settings Panel */}
+    <div className="relative">
+      {/* Warm glow effect behind - only for global variant */}
+      {isGlobal && (
+        <div className="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 rounded-3xl blur-xl opacity-50 pointer-events-none" />
+      )}
+
+      <div className={`relative ${isGlobal
+        ? "bg-elevated/80 backdrop-blur-2xl border border-border/50 p-4 rounded-2xl shadow-2xl shadow-black/30 w-full max-w-2xl mx-auto"
+        : "bg-elevated/90 backdrop-blur-xl border border-border/50 p-3 rounded-xl shadow-xl shadow-black/30 w-[600px]"
+      }`}>
+      {/* Settings Panel - Warm Ember */}
       {showSettings && !isExtension && (
         <div className={`
-            absolute left-0 right-0 p-4 bg-surface border border-border rounded-xl shadow-2xl z-20
-            ${isGlobal ? 'bottom-full mb-2' : 'top-full mt-2'} 
-            animate-in fade-in zoom-in-95 duration-200
+            absolute left-0 right-0 p-4 bg-elevated/95 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl shadow-black/30 z-20
+            ${isGlobal ? 'bottom-full mb-3' : 'top-full mt-3'}
+            animate-scale-in
         `}>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Model Selection */}
@@ -726,25 +732,26 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <button
                 onClick={() => handleSubmit()}
                 disabled={isGenerating || (!prompt.trim() && attachments.length === 0 && contextAttachments.length === 0)}
-                className={`p-2.5 rounded-xl flex items-center justify-center transition-all ${
-                isGenerating 
-                    ? 'bg-primary/50 cursor-not-allowed' 
-                    : 'bg-primary hover:bg-primary-hover text-white shadow-lg shadow-blue-900/20'
+                className={`p-3 rounded-xl flex items-center justify-center transition-all duration-200 ${
+                isGenerating
+                    ? 'bg-primary/50 cursor-not-allowed'
+                    : 'bg-primary hover:bg-primary-hover hover:scale-105 text-white shadow-lg shadow-primary/30'
                 }`}
             >
                 {isGenerating ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
             </button>
         </div>
       </div>
-      
+
       {onCancel && (
-        <button 
+        <button
             onClick={onCancel}
-            className="absolute -top-3 -right-3 bg-surface border border-border p-1.5 rounded-full text-gray-400 hover:text-white shadow-lg"
+            className="absolute -top-3 -right-3 bg-elevated border border-border/50 p-1.5 rounded-full text-text-secondary hover:text-text-primary hover:bg-surface transition-colors shadow-lg"
         >
             <X size={14} />
         </button>
       )}
+      </div>
     </div>
   );
 };

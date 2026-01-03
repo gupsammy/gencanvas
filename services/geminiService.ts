@@ -11,6 +11,19 @@ export interface GenerationResult {
     generationConfig?: GenerationMetadata;
 }
 
+// Cancellation options for generation functions
+export interface GenerationCallbacks {
+    signal?: AbortSignal;
+    onProgress?: (progress: number) => void;
+}
+
+// Helper to check abort and throw if cancelled
+const checkAbort = (signal?: AbortSignal) => {
+    if (signal?.aborted) {
+        throw new DOMException('Generation cancelled', 'AbortError');
+    }
+};
+
 // WAV Header Helper
 function pcmToWav(pcmData: Int16Array, sampleRate: number): ArrayBuffer {
   const headerLength = 44;
@@ -82,14 +95,19 @@ export const generateLayerTitle = async (prompt: string): Promise<string> => {
 /**
  * Generates audio speech from text.
  */
-export const generateSpeechContent = async (options: GenerateOptions): Promise<GenerationResult> => {
+export const generateSpeechContent = async (options: GenerateOptions, callbacks?: GenerationCallbacks): Promise<GenerationResult> => {
     const { prompt, voice = 'Kore', creativity = 65 } = options;
+    const { signal, onProgress } = callbacks || {};
+
+    checkAbort(signal);
     const ai = getAiClient();
-    
+
     // Map creativity 0-100 to temperature 0.0-1.0 (approx)
     const temperature = creativity / 100;
+    onProgress?.(10); // Starting
 
     try {
+        checkAbort(signal);
         const response = await ai.models.generateContent({
             model: ModelId.GEMINI_2_5_FLASH_TTS,
             contents: { parts: [{ text: prompt }] },
@@ -104,6 +122,9 @@ export const generateSpeechContent = async (options: GenerateOptions): Promise<G
             },
         });
 
+        checkAbort(signal);
+        onProgress?.(80); // Processing response
+
         const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (!base64Audio) {
             throw new Error("No audio data returned");
@@ -113,7 +134,7 @@ export const generateSpeechContent = async (options: GenerateOptions): Promise<G
         const pcmBytes = base64ToUint8Array(base64Audio);
         const pcmInt16 = new Int16Array(pcmBytes.buffer);
         const wavBuffer = pcmToWav(pcmInt16, 24000);
-        
+
         // Convert WAV buffer back to base64 for storage/src
         let binary = '';
         const bytes = new Uint8Array(wavBuffer);
@@ -123,12 +144,16 @@ export const generateSpeechContent = async (options: GenerateOptions): Promise<G
         }
         const wavBase64 = btoa(binary);
 
+        onProgress?.(100);
         return {
             url: `data:audio/wav;base64,${wavBase64}`,
             generationConfig: { voice, creativity }
         };
 
     } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+            throw error; // Re-throw abort errors without logging
+        }
         console.error("Gemini Speech Generation Error:", error);
         throw error;
     }
@@ -137,9 +162,13 @@ export const generateSpeechContent = async (options: GenerateOptions): Promise<G
 /**
  * Generates an image based on a prompt and optional reference images.
  */
-export const generateImageContent = async (options: GenerateOptions): Promise<GenerationResult> => {
+export const generateImageContent = async (options: GenerateOptions, callbacks?: GenerationCallbacks): Promise<GenerationResult> => {
   const { prompt, model, referenceImages = [], aspectRatio = '1:1', creativity = 50, imageSize = '1K' } = options;
+  const { signal, onProgress } = callbacks || {};
+
+  checkAbort(signal);
   const ai = getAiClient();
+  onProgress?.(10);
 
   try {
     const parts: Part[] = [];
@@ -183,6 +212,9 @@ export const generateImageContent = async (options: GenerateOptions): Promise<Ge
         config.imageConfig.imageSize = imageSize;
     }
 
+    checkAbort(signal);
+    onProgress?.(30);
+
     const response = await ai.models.generateContent({
       model: model,
       contents: {
@@ -190,6 +222,9 @@ export const generateImageContent = async (options: GenerateOptions): Promise<Ge
       },
       config: config
     });
+
+    checkAbort(signal);
+    onProgress?.(90);
 
     const candidates = response.candidates;
     if (!candidates || candidates.length === 0) {
@@ -200,6 +235,7 @@ export const generateImageContent = async (options: GenerateOptions): Promise<Ge
     const imagePart = contentParts.find(p => p.inlineData);
 
     if (imagePart && imagePart.inlineData) {
+      onProgress?.(100);
       return {
           url: `data:${imagePart.inlineData.mimeType || 'image/png'};base64,${imagePart.inlineData.data}`,
           generationConfig: {
@@ -219,6 +255,9 @@ export const generateImageContent = async (options: GenerateOptions): Promise<Ge
     throw new Error("No image data found in the response.");
 
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error;
+    }
     console.error("Gemini Image Generation Error:", error);
     throw error;
   }
@@ -227,19 +266,22 @@ export const generateImageContent = async (options: GenerateOptions): Promise<Ge
 /**
  * Generates a video based on a prompt and optional reference images using Veo.
  */
-export const generateVideoContent = async (options: GenerateOptions): Promise<GenerationResult> => {
-  const { 
-    prompt, 
-    model, 
+export const generateVideoContent = async (options: GenerateOptions, callbacks?: GenerationCallbacks): Promise<GenerationResult> => {
+  const {
+    prompt,
+    model,
     startImage,
     endImage,
     referenceImages = [],
-    aspectRatio = '16:9', 
-    resolution = '720p', 
+    aspectRatio = '16:9',
+    resolution = '720p',
     inputVideoMetadata,
-    durationSeconds = "8", // Default to 8 now
-    videoMode = 'standard' 
+    durationSeconds = "8",
+    videoMode = 'standard'
   } = options;
+  const { signal, onProgress } = callbacks || {};
+
+  checkAbort(signal);
 
   // 1. API Key Check for Veo
   const win = window as any;
@@ -253,6 +295,9 @@ export const generateVideoContent = async (options: GenerateOptions): Promise<Ge
       }
     }
   }
+
+  checkAbort(signal);
+  onProgress?.(5);
 
   // 2. Refresh Client after key selection
   const ai = getAiClient();
@@ -333,25 +378,42 @@ export const generateVideoContent = async (options: GenerateOptions): Promise<Ge
     }
 
     // 3. Initiate Generation
-    // console.log("Generating Video with params:", JSON.stringify(veoParams, null, 2));
+    checkAbort(signal);
+    onProgress?.(10);
     let operation = await ai.models.generateVideos(veoParams);
 
-    // 4. Poll for completion
-    while (!operation.done) {
-      await new Promise(resolve => setTimeout(resolve, 10000)); // Poll every 10s per guidelines
+    // 4. Poll for completion with progress tracking
+    const MAX_POLLS = 60; // 10 minute timeout (60 * 10s = 600s)
+    let pollCount = 0;
+
+    while (!operation.done && pollCount < MAX_POLLS) {
+      // Check abort before polling
+      checkAbort(signal);
+
+      await new Promise(resolve => setTimeout(resolve, 10000)); // Poll every 10s
+      pollCount++;
+
+      // Report progress: 10% start + up to 80% during polling
+      const pollProgress = 10 + Math.floor((pollCount / MAX_POLLS) * 80);
+      onProgress?.(pollProgress);
+
+      checkAbort(signal);
       operation = await ai.operations.getVideosOperation({operation: operation});
-      
-      // Explicitly check for operation-level errors
+
       if (operation.error) {
           throw new Error(`Video generation failed: ${operation.error.message || JSON.stringify(operation.error)}`);
       }
     }
 
+    if (pollCount >= MAX_POLLS && !operation.done) {
+      throw new Error("Video generation timed out after 10 minutes.");
+    }
+
+    onProgress?.(90);
     const generatedVideo = operation.response?.generatedVideos?.[0];
     const downloadLink = generatedVideo?.video?.uri;
-    
+
     if (!downloadLink) {
-      // Fallback: Check if there's an error in the response body that wasn't in operation.error
       if (operation.response && (operation.response as any).error) {
            throw new Error(`Video generation failed: ${(operation.response as any).error.message}`);
       }
@@ -359,11 +421,15 @@ export const generateVideoContent = async (options: GenerateOptions): Promise<Ge
     }
 
     // 5. Fetch and Blob
+    checkAbort(signal);
+    onProgress?.(95);
+
     const videoRes = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
     if (!videoRes.ok) {
        throw new Error(`Failed to download video: ${videoRes.statusText}`);
     }
-    
+
+    checkAbort(signal);
     const blob = await videoRes.blob();
     const url = URL.createObjectURL(blob);
 
@@ -376,6 +442,7 @@ export const generateVideoContent = async (options: GenerateOptions): Promise<Ge
         videoMode: videoMode
     };
 
+    onProgress?.(100);
     return {
         url,
         metadata: generatedVideo?.video,
@@ -383,6 +450,9 @@ export const generateVideoContent = async (options: GenerateOptions): Promise<Ge
     };
 
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error;
+    }
     console.error("Gemini Video Generation Error:", error);
     throw error;
   }

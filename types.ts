@@ -18,6 +18,19 @@ export enum ModelId {
 export type MediaType = 'image' | 'video' | 'sticky' | 'group' | 'drawing' | 'text' | 'audio';
 export type VideoMode = 'standard' | 'interpolation' | 'references';
 
+// Generation task management for non-blocking UI
+export type GenerationStatus = 'queued' | 'generating' | 'polling' | 'completed' | 'failed';
+
+export interface GenerationTask {
+  id: string;
+  layerId: string;
+  status: GenerationStatus;
+  abortController: AbortController;
+  progress?: number; // 0-100 for video polling
+  mediaType: MediaType;
+  startedAt: number;
+}
+
 export interface GenerationMetadata {
     model?: string;
     aspectRatio?: string;
@@ -62,7 +75,15 @@ export interface TextAnnotation {
     fontSize: number;
 }
 
-export type Annotation = DrawingPath | TextAnnotation;
+export interface RectangleAnnotation {
+    id: string;
+    type: 'rectangle';
+    vertices: {x: number, y: number}[]; // 4 vertices: [topLeft, topRight, bottomRight, bottomLeft]
+    color: string;
+    strokeWidth: number;
+}
+
+export type Annotation = DrawingPath | TextAnnotation | RectangleAnnotation;
 
 export interface LayerData {
   id: string;

@@ -1,15 +1,15 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { LayerData, Attachment, ModelId, MediaType, VideoMode, Annotation, PromptState } from '../types';
+import { LayerData, Attachment, ModelId, MediaType, VideoMode, Annotation, PromptState, GenerationTask } from '../types';
 import { DEFAULT_MODEL, STICKY_COLORS, GROUP_COLORS } from '../constants';
 import PromptBar from './PromptBar';
-import { 
-    Move, Trash2, MoreHorizontal, Copy, FlipHorizontal, 
+import {
+    Move, Trash2, MoreHorizontal, Copy, FlipHorizontal,
     FlipVertical, Download, Crop, ChevronRight, X,
     Edit3, PlusCircle, Eraser, Play, Volume2, VolumeX, Loader2, AlertCircle,
     Pencil, Type as TypeIcon, Palette, RotateCcw, BoxSelect, StickyNote,
     BringToFront, SendToBack, ArrowUp, ArrowDown, Mic, Pause, Minus, Plus,
-    Maximize
+    Maximize, Square
 } from 'lucide-react';
 
 interface CanvasLayerProps {
@@ -48,11 +48,15 @@ interface CanvasLayerProps {
   onExtendVideo?: (id: string, prompt: string) => void;
   onReorder: (id: string, action: 'front' | 'back' | 'forward' | 'backward') => void;
   isGenerating: boolean;
+  generationTask?: GenerationTask;
+  onCancelGeneration?: () => void;
   onSelectOnCanvasStart?: () => void;
   injectedAttachment?: Attachment | null;
 }
 
 const DRAWING_COLORS = ['#FFFFFF', '#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#6366F1', '#8B5CF6', '#EC4899', '#000000'];
+const STROKE_WIDTHS = [1, 2, 3, 4, 6, 8, 12, 16];
+const FONT_SIZES = [12, 16, 20, 24, 32, 48, 64];
 
 // Helper to determine text color based on background
 const getContrastColor = (hexColor: string) => {
@@ -92,6 +96,8 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   onExtendVideo,
   onReorder,
   isGenerating,
+  generationTask,
+  onCancelGeneration,
   onSelectOnCanvasStart,
   injectedAttachment
 }) => {
@@ -109,16 +115,23 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
 
   // Annotation State
-  const [tool, setTool] = useState<'cursor' | 'pencil' | 'text'>('cursor');
+  const [tool, setTool] = useState<'cursor' | 'pencil' | 'text' | 'rectangle'>('cursor');
   const [color, setColor] = useState('#EF4444');
+  const [strokeWidth, setStrokeWidth] = useState(3);
+  const [annotationFontSize, setAnnotationFontSize] = useState(16);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showStrokePicker, setShowStrokePicker] = useState(false);
+  const [showFontSizePicker, setShowFontSizePicker] = useState(false);
   const [drawingPath, setDrawingPath] = useState<{x: number, y: number}[]>([]);
+  const [drawingRect, setDrawingRect] = useState<{startX: number, startY: number, endX?: number, endY?: number} | null>(null);
   
   // Annotation Selection
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [isDraggingAnnotation, setIsDraggingAnnotation] = useState(false);
   const [isResizingAnnotation, setIsResizingAnnotation] = useState(false);
-  const annotationDragStartRef = useRef<{x: number, y: number, initialX: number, initialY: number, initialSize?: number}>({ x: 0, y: 0, initialX: 0, initialY: 0 });
+  const [isDraggingVertex, setIsDraggingVertex] = useState(false);
+  const [draggingVertexIndex, setDraggingVertexIndex] = useState<number | null>(null);
+  const annotationDragStartRef = useRef<{x: number, y: number, initialX: number, initialY: number, initialSize?: number, initialVertices?: {x: number, y: number}[]}>({ x: 0, y: 0, initialX: 0, initialY: 0 });
 
   // Text Tool State
   const [textInput, setTextInput] = useState<{x: number, y: number, value: string} | null>(null);
@@ -164,7 +177,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const textInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
 
   // LOD (Level of Detail) state for performance
   const [fullResLoaded, setFullResLoaded] = useState(!layer.thumbnail); // If no thumbnail, full-res is the default
@@ -202,6 +215,13 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           setShowMenu(false);
       }
   }, [isSelected]);
+
+  // Close pickers when tool changes
+  useEffect(() => {
+      setShowStrokePicker(false);
+      setShowFontSizePicker(false);
+      setShowColorPicker(false);
+  }, [tool]);
 
   // Handle Injected Attachments
   useEffect(() => {
@@ -250,6 +270,17 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                       ctx.lineTo(ann.points[i].x, ann.points[i].y);
                   }
                   ctx.stroke();
+              } else if (ann.type === 'rectangle') {
+                  if (ann.vertices.length !== 4) return;
+                  ctx.beginPath();
+                  ctx.strokeStyle = ann.color;
+                  ctx.lineWidth = ann.strokeWidth;
+                  ctx.moveTo(ann.vertices[0].x, ann.vertices[0].y);
+                  for (let i = 1; i < ann.vertices.length; i++) {
+                      ctx.lineTo(ann.vertices[i].x, ann.vertices[i].y);
+                  }
+                  ctx.closePath();
+                  ctx.stroke();
               }
           });
       }
@@ -257,7 +288,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       if (drawingPath.length > 1) {
           ctx.beginPath();
           ctx.strokeStyle = color;
-          ctx.lineWidth = 3;
+          ctx.lineWidth = strokeWidth;
           ctx.moveTo(drawingPath[0].x, drawingPath[0].y);
           for (let i = 1; i < drawingPath.length; i++) {
               ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
@@ -265,7 +296,22 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           ctx.stroke();
       }
 
-  }, [layer.width, layer.height, layer.annotations, drawingPath, color]);
+      // Draw rectangle preview while drawing
+      if (drawingRect && drawingRect.endX !== undefined && drawingRect.endY !== undefined) {
+          const minX = Math.min(drawingRect.startX, drawingRect.endX);
+          const minY = Math.min(drawingRect.startY, drawingRect.endY);
+          const width = Math.abs(drawingRect.endX - drawingRect.startX);
+          const height = Math.abs(drawingRect.endY - drawingRect.startY);
+
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = strokeWidth;
+          ctx.setLineDash([5, 5]);
+          ctx.strokeRect(minX, minY, width, height);
+          ctx.setLineDash([]);
+      }
+
+  }, [layer.width, layer.height, layer.annotations, drawingPath, color, strokeWidth, drawingRect]);
 
   // ... [Keep Annotation manipulation functions similar to before, summarized below]
   const handleAnnotationMouseDown = (e: React.MouseEvent, annId: string) => {
@@ -275,6 +321,9 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       const ann = layer.annotations?.find(a => a.id === annId);
       if (ann && ann.type === 'text') {
         annotationDragStartRef.current = { x: e.clientX, y: e.clientY, initialX: ann.x, initialY: ann.y };
+      } else if (ann && ann.type === 'rectangle') {
+        // For rectangles, we just select them, dragging is handled by vertex handles
+        setIsDraggingAnnotation(false);
       }
   };
   const handleAnnotationResizeMouseDown = (e: React.MouseEvent, annId: string) => {
@@ -288,9 +337,40 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       onUpdateAnnotations(layer.id, (layer.annotations || []).filter(a => a.id !== annId));
       setSelectedAnnotationId(null);
   };
+  const handleUpdateAnnotationColor = (annId: string, newColor: string) => {
+      onUpdateAnnotations(layer.id, (layer.annotations || []).map(a => a.id === annId ? { ...a, color: newColor } : a));
+      onDragEnd(layer.id);
+  };
+  const handleUpdateAnnotationSize = (annId: string, newSize: number) => {
+      onUpdateAnnotations(layer.id, (layer.annotations || []).map(a => {
+          if (a.id === annId) {
+              if (a.type === 'text') return { ...a, fontSize: newSize };
+              if (a.type === 'rectangle') return { ...a, strokeWidth: newSize };
+              if (a.type === 'path') return { ...a, width: newSize };
+          }
+          return a;
+      }));
+      onDragEnd(layer.id);
+  };
+  const handleVertexMouseDown = (e: React.MouseEvent, annId: string, vertexIndex: number) => {
+      e.stopPropagation(); e.preventDefault();
+      setIsDraggingVertex(true);
+      setDraggingVertexIndex(vertexIndex);
+      setSelectedAnnotationId(annId);
+      const ann = layer.annotations?.find(a => a.id === annId);
+      if (ann && ann.type === 'rectangle') {
+          annotationDragStartRef.current = {
+              x: e.clientX,
+              y: e.clientY,
+              initialX: 0,
+              initialY: 0,
+              initialVertices: [...ann.vertices]
+          };
+      }
+  };
   useEffect(() => {
       const handleGlobalMouseMove = (e: MouseEvent) => {
-          if (!isDraggingAnnotation && !isResizingAnnotation) return;
+          if (!isDraggingAnnotation && !isResizingAnnotation && !isDraggingVertex) return;
           if (!selectedAnnotationId) return;
           const deltaX = (e.clientX - annotationDragStartRef.current.x) / scale;
           const deltaY = (e.clientY - annotationDragStartRef.current.y) / scale;
@@ -299,16 +379,51 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           } else if (isResizingAnnotation) {
               const newSize = Math.max(10, (annotationDragStartRef.current.initialSize || 24) + ((deltaX + deltaY) * 0.5));
               onUpdateAnnotations(layer.id, (layer.annotations || []).map(a => a.id === selectedAnnotationId && a.type === 'text' ? { ...a, fontSize: newSize } : a));
+          } else if (isDraggingVertex && draggingVertexIndex !== null && annotationDragStartRef.current.initialVertices) {
+              onUpdateAnnotations(layer.id, (layer.annotations || []).map(a => {
+                  if (a.id === selectedAnnotationId && a.type === 'rectangle') {
+                      // Vertex indices: 0=TL, 1=TR, 2=BR, 3=BL
+                      const newVertices = annotationDragStartRef.current.initialVertices!.map(v => ({ ...v }));
+                      const draggedIdx = draggingVertexIndex;
+                      const newPos = {
+                          x: annotationDragStartRef.current.initialVertices![draggedIdx].x + deltaX,
+                          y: annotationDragStartRef.current.initialVertices![draggedIdx].y + deltaY
+                      };
+
+                      // Update dragged vertex
+                      newVertices[draggedIdx] = newPos;
+
+                      // Update adjacent vertices to maintain rectangle shape:
+                      // - Vertex sharing X with dragged gets new X
+                      // - Vertex sharing Y with dragged gets new Y
+                      if (draggedIdx === 0) { // TL: fix BR(2), update TR(1).y and BL(3).x
+                          newVertices[1] = { ...newVertices[1], y: newPos.y };
+                          newVertices[3] = { ...newVertices[3], x: newPos.x };
+                      } else if (draggedIdx === 1) { // TR: fix BL(3), update TL(0).y and BR(2).x
+                          newVertices[0] = { ...newVertices[0], y: newPos.y };
+                          newVertices[2] = { ...newVertices[2], x: newPos.x };
+                      } else if (draggedIdx === 2) { // BR: fix TL(0), update TR(1).x and BL(3).y
+                          newVertices[1] = { ...newVertices[1], x: newPos.x };
+                          newVertices[3] = { ...newVertices[3], y: newPos.y };
+                      } else if (draggedIdx === 3) { // BL: fix TR(1), update TL(0).x and BR(2).y
+                          newVertices[0] = { ...newVertices[0], x: newPos.x };
+                          newVertices[2] = { ...newVertices[2], y: newPos.y };
+                      }
+
+                      return { ...a, vertices: newVertices };
+                  }
+                  return a;
+              }));
           }
       };
       const handleGlobalMouseUp = () => {
-          if (isDraggingAnnotation || isResizingAnnotation) {
-              setIsDraggingAnnotation(false); setIsResizingAnnotation(false); onDragEnd(layer.id);
+          if (isDraggingAnnotation || isResizingAnnotation || isDraggingVertex) {
+              setIsDraggingAnnotation(false); setIsResizingAnnotation(false); setIsDraggingVertex(false); setDraggingVertexIndex(null); onDragEnd(layer.id);
           }
       };
-      if (isDraggingAnnotation || isResizingAnnotation) { window.addEventListener('mousemove', handleGlobalMouseMove); window.addEventListener('mouseup', handleGlobalMouseUp); }
+      if (isDraggingAnnotation || isResizingAnnotation || isDraggingVertex) { window.addEventListener('mousemove', handleGlobalMouseMove); window.addEventListener('mouseup', handleGlobalMouseUp); }
       return () => { window.removeEventListener('mousemove', handleGlobalMouseMove); window.removeEventListener('mouseup', handleGlobalMouseUp); };
-  }, [isDraggingAnnotation, isResizingAnnotation, selectedAnnotationId, scale, layer.annotations, onUpdateAnnotations, onDragEnd, layer.id]);
+  }, [isDraggingAnnotation, isResizingAnnotation, isDraggingVertex, draggingVertexIndex, selectedAnnotationId, scale, layer.annotations, onUpdateAnnotations, onDragEnd, layer.id]);
 
   // ... [Canvas Drawing Handlers]
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
@@ -323,6 +438,11 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           if (!rect) return;
           if (textInput) commitText();
           setTextInput({ x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale, value: '' });
+      } else if (tool === 'rectangle') {
+          e.stopPropagation(); e.preventDefault();
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          setDrawingRect({ startX: (e.clientX - rect.left) / scale, startY: (e.clientY - rect.top) / scale });
       } else if (tool === 'cursor') {
           setSelectedAnnotationId(null);
       }
@@ -332,18 +452,58 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           const rect = canvasRef.current?.getBoundingClientRect();
           if (!rect) return;
           setDrawingPath(prev => [...prev, {x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale}]);
+      } else if (tool === 'rectangle' && drawingRect && drawingRect.startX !== undefined) {
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          setDrawingRect({
+              ...drawingRect,
+              endX: (e.clientX - rect.left) / scale,
+              endY: (e.clientY - rect.top) / scale
+          });
       }
   };
-  const handleCanvasMouseUp = () => {
+  const handleCanvasMouseUp = (e?: React.MouseEvent) => {
       if (tool === 'pencil' && drawingPath.length > 0) {
-          const newPath: Annotation = { id: crypto.randomUUID(), type: 'path', points: drawingPath, color: color, width: 3 };
+          const newPath: Annotation = { id: crypto.randomUUID(), type: 'path', points: drawingPath, color: color, width: strokeWidth };
           onUpdateAnnotations(layer.id, [...(layer.annotations || []), newPath]);
           onDragEnd(layer.id); setDrawingPath([]);
+      }
+      if (tool === 'rectangle' && drawingRect && e) {
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const endX = (e.clientX - rect.left) / scale;
+          const endY = (e.clientY - rect.top) / scale;
+          const minX = Math.min(drawingRect.startX, endX);
+          const minY = Math.min(drawingRect.startY, endY);
+          const maxX = Math.max(drawingRect.startX, endX);
+          const maxY = Math.max(drawingRect.startY, endY);
+
+          // Only create rectangle if it has some size
+          if (Math.abs(maxX - minX) > 5 && Math.abs(maxY - minY) > 5) {
+              const vertices = [
+                  { x: minX, y: minY },        // top-left
+                  { x: maxX, y: minY },        // top-right
+                  { x: maxX, y: maxY },        // bottom-right
+                  { x: minX, y: maxY }         // bottom-left
+              ];
+              const newRect: Annotation = {
+                  id: crypto.randomUUID(),
+                  type: 'rectangle',
+                  vertices,
+                  color: color,
+                  strokeWidth: strokeWidth
+              };
+              onUpdateAnnotations(layer.id, [...(layer.annotations || []), newRect]);
+              onDragEnd(layer.id);
+              setSelectedAnnotationId(newRect.id);
+              setTool('cursor');
+          }
+          setDrawingRect(null);
       }
   };
   const commitText = () => {
       if (textInput && textInput.value.trim()) {
-          const newText: Annotation = { id: crypto.randomUUID(), type: 'text', x: textInput.x, y: textInput.y, text: textInput.value, color: color, fontSize: 24 };
+          const newText: Annotation = { id: crypto.randomUUID(), type: 'text', x: textInput.x, y: textInput.y, text: textInput.value, color: color, fontSize: annotationFontSize };
           onUpdateAnnotations(layer.id, [...(layer.annotations || []), newText]);
           onDragEnd(layer.id); setSelectedAnnotationId(newText.id); setTool('cursor');
       }
@@ -531,6 +691,12 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                   ctx.moveTo(ann.points[0].x, ann.points[0].y); for (let i = 1; i < ann.points.length; i++) ctx.lineTo(ann.points[i].x, ann.points[i].y); ctx.stroke();
               } else if (ann.type === 'text') {
                   ctx.fillStyle = ann.color; ctx.font = `bold ${ann.fontSize}px sans-serif`; ctx.textBaseline = 'top'; ctx.fillText(ann.text, ann.x, ann.y);
+              } else if (ann.type === 'rectangle') {
+                  if (ann.vertices.length !== 4) return;
+                  ctx.beginPath(); ctx.strokeStyle = ann.color; ctx.lineWidth = ann.strokeWidth; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                  ctx.moveTo(ann.vertices[0].x, ann.vertices[0].y);
+                  for (let i = 1; i < ann.vertices.length; i++) ctx.lineTo(ann.vertices[i].x, ann.vertices[i].y);
+                  ctx.closePath(); ctx.stroke();
               }
           });
       }
@@ -624,16 +790,62 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const layerAttachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: layer.src, mimeType: layer.type === 'video' ? 'video/mp4' : 'image/png', base64: layer.src };
 
   if (layer.isLoading) {
+    const progress = generationTask?.progress || 0;
+    const isVideo = generationTask?.mediaType === 'video';
+    const statusText = isVideo
+        ? (progress > 10 ? `Rendering video... ${Math.round(progress)}%` : 'Starting video generation...')
+        : 'Creating your image...';
+
     return (
-        <div className="absolute bg-surface/50 border border-border/50 rounded-lg flex flex-col items-center justify-center animate-pulse shadow-lg" style={{ left: layer.x, top: layer.y, width: layer.width, height: layer.height, zIndex: isSelected ? 50 : 10 }}>
-            <Loader2 size={32} className="text-primary animate-spin mb-2" /><span className="text-xs text-gray-400 font-medium tracking-wide">Generating...</span>
+        <div className="absolute bg-elevated/90 backdrop-blur-xl border border-border/50 rounded-2xl flex flex-col items-center justify-center shadow-2xl shadow-black/40" style={{ left: layer.x, top: layer.y, width: layer.width, height: layer.height, zIndex: isSelected ? 50 : 10 }}>
+            {/* Animated rings - Warm Ember */}
+            <div className="relative w-16 h-16 mb-4">
+                <div className="absolute inset-0 border-2 border-primary/30 rounded-full animate-ring-expand ring-delay-1" />
+                <div className="absolute inset-2 border-2 border-primary/50 rounded-full animate-ring-expand ring-delay-2" />
+                <div className="absolute inset-4 bg-primary/20 rounded-full animate-ember-pulse" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 size={20} className="text-primary animate-spin" />
+                </div>
+            </div>
+
+            <span className="text-sm font-medium text-text-primary mb-1">{statusText}</span>
+
+            {/* Progress bar for video */}
+            {isVideo && progress > 0 && (
+                <div className="w-3/4 max-w-[200px] h-1.5 bg-surface rounded-full overflow-hidden mt-2 mb-3">
+                    <div
+                        className="h-full bg-gradient-to-r from-primary to-primary-hover rounded-full transition-all duration-500 ease-out"
+                        style={{ width: `${progress}%` }}
+                    />
+                </div>
+            )}
+
+            {!isVideo && (
+                <span className="text-xs text-text-secondary animate-pulse">This usually takes 5-10 seconds</span>
+            )}
+
+            {/* Cancel button */}
+            {onCancelGeneration && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); onCancelGeneration(); }}
+                    className="mt-4 flex items-center gap-1.5 px-3 py-1.5 bg-surface hover:bg-border/50 border border-border/50 rounded-lg text-xs text-text-secondary hover:text-text-primary transition-all duration-200"
+                >
+                    <X size={12} />
+                    Cancel
+                </button>
+            )}
         </div>
     );
   }
   if (layer.error) {
     return (
-        <div className="absolute bg-red-900/10 border border-red-500/30 rounded-lg flex flex-col items-center justify-center shadow-lg" style={{ left: layer.x, top: layer.y, width: layer.width, height: layer.height, zIndex: isSelected ? 50 : 10 }}>
-            <AlertCircle size={32} className="text-red-500 mb-2" /><span className="text-xs text-red-400 font-medium tracking-wide px-4 text-center">{layer.error}</span><button onClick={() => onDelete(layer.id)} className="mt-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-[10px] px-2 py-1 rounded transition-colors">Dismiss</button>
+        <div className="absolute bg-red-950/50 backdrop-blur-xl border border-red-500/30 rounded-2xl flex flex-col items-center justify-center shadow-2xl shadow-black/40 p-6" style={{ left: layer.x, top: layer.y, width: layer.width, height: layer.height, zIndex: isSelected ? 50 : 10 }}>
+            <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center mb-3">
+                <AlertCircle size={24} className="text-red-400" />
+            </div>
+            <span className="text-sm font-medium text-red-300 mb-1">Generation Failed</span>
+            <span className="text-xs text-red-400/80 text-center max-w-[80%] mb-4">{layer.error}</span>
+            <button onClick={() => onDelete(layer.id)} className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300 text-xs rounded-lg transition-colors">Dismiss</button>
         </div>
     );
   }
@@ -649,7 +861,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   };
 
   // Logic to show color tools
-  const showColorTools = layer.type === 'drawing' || layer.type === 'sticky' || layer.type === 'group' || layer.type === 'text' || tool === 'pencil' || tool === 'text';
+  const showColorTools = layer.type === 'drawing' || layer.type === 'sticky' || layer.type === 'group' || layer.type === 'text' || tool === 'pencil' || tool === 'text' || tool === 'rectangle';
 
   // Logic to show text size tools
   const showTextSizeTools = (layer.type === 'sticky' || layer.type === 'text') && onUpdateFontSize;
@@ -708,7 +920,53 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                   {/* Annotation Tools */}
                   <button onClick={() => setTool(tool === 'pencil' ? 'cursor' : 'pencil')} className={`p-1.5 rounded-md transition-colors ${tool === 'pencil' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Draw"><Pencil size={16} /></button>
                   <button onClick={() => setTool(tool === 'text' ? 'cursor' : 'text')} className={`p-1.5 rounded-md transition-colors ${tool === 'text' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Add Text Overlay"><TypeIcon size={16} /></button>
-                  
+                  <button onClick={() => setTool(tool === 'rectangle' ? 'cursor' : 'rectangle')} className={`p-1.5 rounded-md transition-colors ${tool === 'rectangle' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Draw Rectangle"><Square size={16} /></button>
+
+                  {(tool === 'pencil' || tool === 'rectangle') && (
+                    <div className="relative flex items-center gap-1 border-r border-white/10 pr-2 mr-1">
+                        <button onClick={() => setShowStrokePicker(!showStrokePicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/10 flex items-center gap-1 text-[10px] font-mono">
+                            <div className="w-0.5 rounded-full bg-gray-300" style={{ height: `${Math.min(strokeWidth * 2, 16)}px` }}></div>
+                            <span>{strokeWidth}px</span>
+                        </button>
+                        {showStrokePicker && (
+                            <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-surface border border-border p-2 rounded-lg flex flex-col gap-1 shadow-xl z-50 min-w-[80px]">
+                                {STROKE_WIDTHS.map(w => (
+                                    <button
+                                        key={w}
+                                        onClick={() => { setStrokeWidth(w); setShowStrokePicker(false); }}
+                                        className={`px-2 py-1.5 rounded text-xs hover:bg-white/10 flex items-center gap-2 ${strokeWidth === w ? 'bg-white/10 text-white' : 'text-gray-400'}`}
+                                    >
+                                        <div className="w-0.5 rounded-full bg-current" style={{ height: `${Math.min(w * 2, 16)}px` }}></div>
+                                        <span>{w}px</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                  )}
+
+                  {tool === 'text' && (
+                    <div className="relative flex items-center gap-1 border-r border-white/10 pr-2 mr-1">
+                        <button onClick={() => setShowFontSizePicker(!showFontSizePicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/10 flex items-center gap-1 text-[10px] font-mono">
+                            <TypeIcon size={12} />
+                            <span>{annotationFontSize}px</span>
+                        </button>
+                        {showFontSizePicker && (
+                            <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-surface border border-border p-2 rounded-lg flex flex-col gap-1 shadow-xl z-50 min-w-[80px]">
+                                {FONT_SIZES.map(s => (
+                                    <button
+                                        key={s}
+                                        onClick={() => { setAnnotationFontSize(s); setShowFontSizePicker(false); }}
+                                        className={`px-2 py-1.5 rounded text-xs hover:bg-white/10 flex items-center gap-2 ${annotationFontSize === s ? 'bg-white/10 text-white' : 'text-gray-400'}`}
+                                    >
+                                        <span>{s}px</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                  )}
+
                   {showTextSizeTools && (
                     <div className="flex items-center gap-1 border-r border-white/10 pr-2 mr-1">
                         <button onClick={() => onUpdateFontSize?.(layer.id, -4)} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300" title="Decrease Font Size"><Minus size={12} /></button>
@@ -727,6 +985,72 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                         )}
                     </div>
                   )}
+
+                  {/* Selected Annotation Controls */}
+                  {tool === 'cursor' && selectedAnnotationId && (() => {
+                      const selectedAnn = layer.annotations?.find(a => a.id === selectedAnnotationId);
+                      if (!selectedAnn) return null;
+                      return (
+                          <>
+                              <div className="w-px h-4 bg-white/10 mx-1"></div>
+                              {/* Color Picker for Selected Annotation */}
+                              <div className="relative">
+                                  <button onClick={() => setShowColorPicker(!showColorPicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/10 flex items-center gap-1">
+                                      <div className="w-3 h-3 rounded-full border border-white/20" style={{ backgroundColor: selectedAnn.color }}></div>
+                                      <Palette size={14} />
+                                  </button>
+                                  {showColorPicker && (
+                                      <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-surface border border-border p-2 rounded-lg grid grid-cols-3 gap-1 shadow-xl z-50 w-24">
+                                          {DRAWING_COLORS.map(c => (
+                                              <button key={c} onClick={() => { handleUpdateAnnotationColor(selectedAnnotationId, c); setShowColorPicker(false); }} className={`w-6 h-6 rounded-full border ${selectedAnn.color === c ? 'border-white' : 'border-transparent hover:border-white/50'}`} style={{ backgroundColor: c }} />
+                                          ))}
+                                      </div>
+                                  )}
+                              </div>
+                              {/* Size Control for Text Annotations */}
+                              {selectedAnn.type === 'text' && (
+                                  <div className="relative flex items-center gap-1">
+                                      <button onClick={() => setShowFontSizePicker(!showFontSizePicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/10 flex items-center gap-1 text-[10px] font-mono">
+                                          <TypeIcon size={12} />
+                                          <span>{selectedAnn.fontSize}px</span>
+                                      </button>
+                                      {showFontSizePicker && (
+                                          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-surface border border-border p-2 rounded-lg flex flex-col gap-1 shadow-xl z-50 min-w-[80px]">
+                                              {FONT_SIZES.map(s => (
+                                                  <button key={s} onClick={() => { handleUpdateAnnotationSize(selectedAnnotationId, s); setShowFontSizePicker(false); }} className={`px-2 py-1.5 rounded text-xs hover:bg-white/10 flex items-center gap-2 ${selectedAnn.fontSize === s ? 'bg-white/10 text-white' : 'text-gray-400'}`}>
+                                                      <span>{s}px</span>
+                                                  </button>
+                                              ))}
+                                          </div>
+                                      )}
+                                  </div>
+                              )}
+                              {/* Size Control for Rectangle/Path Annotations */}
+                              {(selectedAnn.type === 'rectangle' || selectedAnn.type === 'path') && (
+                                  <div className="relative flex items-center gap-1">
+                                      <button onClick={() => setShowStrokePicker(!showStrokePicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/10 flex items-center gap-1 text-[10px] font-mono">
+                                          <div className="w-0.5 rounded-full bg-gray-300" style={{ height: `${Math.min((selectedAnn.type === 'rectangle' ? selectedAnn.strokeWidth : selectedAnn.width) * 2, 16)}px` }}></div>
+                                          <span>{selectedAnn.type === 'rectangle' ? selectedAnn.strokeWidth : selectedAnn.width}px</span>
+                                      </button>
+                                      {showStrokePicker && (
+                                          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-surface border border-border p-2 rounded-lg flex flex-col gap-1 shadow-xl z-50 min-w-[80px]">
+                                              {STROKE_WIDTHS.map(w => (
+                                                  <button key={w} onClick={() => { handleUpdateAnnotationSize(selectedAnnotationId, w); setShowStrokePicker(false); }} className={`px-2 py-1.5 rounded text-xs hover:bg-white/10 flex items-center gap-2 ${(selectedAnn.type === 'rectangle' ? selectedAnn.strokeWidth : selectedAnn.width) === w ? 'bg-white/10 text-white' : 'text-gray-400'}`}>
+                                                      <div className="w-0.5 rounded-full bg-current" style={{ height: `${Math.min(w * 2, 16)}px` }}></div>
+                                                      <span>{w}px</span>
+                                                  </button>
+                                              ))}
+                                          </div>
+                                      )}
+                                  </div>
+                              )}
+                              {/* Delete button */}
+                              <button onClick={() => handleDeleteAnnotation(selectedAnnotationId)} className="p-1.5 hover:bg-red-500/20 text-gray-300 hover:text-red-400 rounded-md transition-colors" title="Delete Annotation">
+                                  <X size={16} />
+                              </button>
+                          </>
+                      );
+                  })()}
                   <button onClick={clearAnnotations} className="p-1.5 hover:bg-red-500/20 text-gray-300 hover:text-red-400 rounded-md transition-colors" title="Clear Annotations"><RotateCcw size={16} /></button>
 
                   <div className="w-px h-4 bg-white/10 mx-1"></div>
@@ -896,7 +1220,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
             if (ann.type !== 'text') return null;
             const isAnnSelected = selectedAnnotationId === ann.id;
             return (
-                <div key={ann.id} onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)} className={`absolute annotation-overlay cursor-move flex items-start select-none group ${isAnnSelected ? 'z-40 border border-primary bg-black/10' : 'z-30 hover:border hover:border-white/20'}`} style={{ left: ann.x, top: ann.y, color: ann.color, fontSize: `${ann.fontSize}px`, fontWeight: 'bold', fontFamily: 'sans-serif', lineHeight: 1, whiteSpace: 'nowrap', padding: '2px 4px', textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+                <div key={ann.id} onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)} className={`absolute annotation-overlay cursor-move flex items-start select-none group ${isAnnSelected ? 'z-40 border border-primary bg-black/10' : 'z-30 hover:border hover:border-white/20'}`} style={{ left: ann.x, top: ann.y, color: ann.color, fontSize: `${ann.fontSize}px`, fontWeight: '400', fontFamily: 'sans-serif', lineHeight: 1.3, whiteSpace: 'pre-wrap', padding: '2px 4px', textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
                     {ann.text}
                     {isAnnSelected && (
                         <>
@@ -908,9 +1232,88 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
             );
         })}
 
-        <canvas ref={canvasRef} className="absolute inset-0 z-20 pointer-events-none" style={{ pointerEvents: tool !== 'cursor' ? 'auto' : 'none', cursor: tool === 'pencil' ? 'crosshair' : tool === 'text' ? 'text' : 'default' }} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} />
+        {/* Rectangle Annotations with Vertex Handles */}
+        {layer.annotations?.map(ann => {
+            if (ann.type !== 'rectangle') return null;
+            const isAnnSelected = selectedAnnotationId === ann.id;
+            return (
+                <div key={ann.id} className="absolute annotation-overlay pointer-events-none z-30" style={{ inset: 0 }}>
+                    {/* Clickable overlay for selection - only the polygon stroke area is clickable */}
+                    <svg
+                        className="absolute inset-0 w-full h-full pointer-events-none"
+                    >
+                        <polygon
+                            points={ann.vertices.map(v => `${v.x},${v.y}`).join(' ')}
+                            fill="transparent"
+                            stroke="transparent"
+                            strokeWidth={ann.strokeWidth + 10}
+                            style={{ cursor: tool === 'cursor' ? 'pointer' : 'default', pointerEvents: tool === 'cursor' ? 'auto' : 'none' }}
+                            onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)}
+                        />
+                    </svg>
+                    {isAnnSelected && (
+                        <>
+                            {/* Delete button */}
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleDeleteAnnotation(ann.id); }}
+                                className="absolute bg-red-500 text-white rounded-full p-0.5 hover:bg-red-600 shadow-md pointer-events-auto z-50"
+                                style={{
+                                    left: ann.vertices[0].x - 6,
+                                    top: ann.vertices[0].y - 12
+                                }}
+                            >
+                                <X size={8} />
+                            </button>
+                            {/* Vertex handles */}
+                            {ann.vertices.map((vertex, idx) => (
+                                <div
+                                    key={idx}
+                                    onMouseDown={(e) => handleVertexMouseDown(e, ann.id, idx)}
+                                    className="absolute w-3 h-3 bg-white border-2 border-primary rounded-full cursor-move z-50 hover:scale-125 shadow-md pointer-events-auto transition-transform"
+                                    style={{
+                                        left: vertex.x - 6,
+                                        top: vertex.y - 6
+                                    }}
+                                />
+                            ))}
+                        </>
+                    )}
+                </div>
+            );
+        })}
+
+        <canvas ref={canvasRef} className="absolute inset-0 z-20 pointer-events-none" style={{ pointerEvents: tool !== 'cursor' ? 'auto' : 'none', cursor: tool === 'pencil' ? 'crosshair' : tool === 'text' ? 'text' : tool === 'rectangle' ? 'crosshair' : 'default' }} onMouseDown={handleCanvasMouseDown} onMouseMove={handleCanvasMouseMove} onMouseUp={handleCanvasMouseUp} onMouseLeave={handleCanvasMouseUp} />
         {textInput && (
-            <input ref={textInputRef} type="text" autoFocus value={textInput.value} onChange={(e) => setTextInput({...textInput, value: e.target.value})} onKeyDown={(e) => { if(e.key === 'Enter') { e.preventDefault(); commitText(); } }} onBlur={commitText} onMouseDown={(e) => e.stopPropagation()} className="absolute z-30 bg-black/50 text-white border border-primary px-2 py-1 rounded outline-none shadow-lg" style={{ left: textInput.x, top: textInput.y, color: color, fontSize: '24px', fontWeight: 'bold', minWidth: '50px' }} />
+            <div className="absolute z-30" style={{ left: textInput.x, top: textInput.y }} onMouseDown={(e) => e.stopPropagation()}>
+                <textarea
+                    ref={textInputRef}
+                    autoFocus
+                    value={textInput.value}
+                    onChange={(e) => {
+                        setTextInput({...textInput, value: e.target.value});
+                        e.target.style.height = 'auto';
+                        e.target.style.height = e.target.scrollHeight + 'px';
+                    }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            commitText();
+                        }
+                    }}
+                    onBlur={commitText}
+                    placeholder="Type here..."
+                    className="bg-black/60 backdrop-blur-sm text-white border border-primary/50 px-3 py-2 rounded-lg outline-none shadow-xl resize-none overflow-hidden"
+                    style={{
+                        color: color,
+                        fontSize: `${annotationFontSize}px`,
+                        fontWeight: '400',
+                        minWidth: '100px',
+                        maxWidth: '400px',
+                        lineHeight: '1.3',
+                    }}
+                    rows={1}
+                />
+            </div>
         )}
         
         {layer.promptUsed && isSelected && !isResizingMode && !isResizingLayer && (layer.type === 'image' || layer.type === 'video' || layer.type === 'audio') && (

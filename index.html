@@ -4,46 +4,101 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Canvas</title>
+    <!-- Warm Ember Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=General+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         theme: {
           extend: {
+            fontFamily: {
+              display: ['General Sans', 'sans-serif'],
+              body: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
             colors: {
-              background: '#09090b',
-              surface: '#18181b',
-              border: '#27272a',
-              primary: '#3b82f6',
-              'primary-hover': '#2563eb',
+              // Warm Ember palette
+              background: '#0a0908',
+              surface: '#141210',
+              elevated: '#1c1916',
+              border: '#2a2520',
+              primary: '#f59e0b',
+              'primary-hover': '#fbbf24',
+              'primary-subtle': 'rgba(245, 158, 11, 0.1)',
+              // Legacy aliases for compatibility
+              'text-primary': '#fafaf9',
+              'text-secondary': '#a8a29e',
             },
             animation: {
               'spin-slow': 'spin 3s linear infinite',
-            }
+              'fade-in-up': 'fadeInUp 0.3s ease-out forwards',
+              'scale-in': 'scaleIn 0.2s ease-out forwards',
+              'warm-glow': 'warmGlow 2s ease-in-out infinite',
+              'ember-pulse': 'emberPulse 1.5s ease-in-out infinite',
+              'shimmer': 'shimmer 2s infinite',
+            },
+            keyframes: {
+              fadeInUp: {
+                'from': { opacity: '0', transform: 'translateY(8px)' },
+                'to': { opacity: '1', transform: 'translateY(0)' },
+              },
+              scaleIn: {
+                'from': { opacity: '0', transform: 'scale(0.95)' },
+                'to': { opacity: '1', transform: 'scale(1)' },
+              },
+              warmGlow: {
+                '0%, 100%': { boxShadow: '0 0 20px rgba(245,158,11,0.2)' },
+                '50%': { boxShadow: '0 0 30px rgba(245,158,11,0.4)' },
+              },
+              emberPulse: {
+                '0%, 100%': { opacity: '0.5' },
+                '50%': { opacity: '1' },
+              },
+              shimmer: {
+                '0%': { backgroundPosition: '-200% 0' },
+                '100%': { backgroundPosition: '200% 0' },
+              },
+            },
           }
         }
       }
     </script>
     <style>
       body {
-        background-color: #09090b;
-        color: #fafafa;
-        overflow: hidden; /* Prevent body scroll, canvas handles it */
+        background-color: #0a0908;
+        color: #fafaf9;
+        font-family: 'Inter', sans-serif;
+        overflow: hidden;
       }
-      /* Custom scrollbar for aesthetic */
+      /* Warm Ember scrollbar */
       ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
       }
       ::-webkit-scrollbar-track {
-        background: #18181b;
+        background: #141210;
       }
       ::-webkit-scrollbar-thumb {
-        background: #3f3f46;
+        background: #2a2520;
         border-radius: 4px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #52525b;
+        background: #3a3530;
       }
+      /* Loading ring animation */
+      @keyframes ringExpand {
+        0% { transform: scale(0.8); opacity: 1; }
+        100% { transform: scale(1.5); opacity: 0; }
+      }
+      .animate-ring-expand {
+        animation: ringExpand 1.5s ease-out infinite;
+      }
+      /* Staggered ring delays */
+      .ring-delay-1 { animation-delay: 0s; }
+      .ring-delay-2 { animation-delay: 0.3s; }
+      .ring-delay-3 { animation-delay: 0.6s; }
     </style>
   <script type="importmap">
 {
