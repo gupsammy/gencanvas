@@ -95,6 +95,9 @@ export interface LayerData {
   height: number;
   src: string; // Base64 or Blob URL (empty for stickies/groups)
   thumbnail?: string; // 256px thumbnail Base64 for LOD rendering
+  // Asset store IDs (blob-based storage for performance)
+  imageId?: string; // Reference to asset store for full-res image
+  thumbnailId?: string; // Reference to asset store for thumbnail
   color?: string; // For stickies, groups, and text
   text?: string; // Main text content for stickies and text layers
   fontSize?: number; // Custom font size for text content

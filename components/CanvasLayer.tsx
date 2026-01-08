@@ -1118,33 +1118,38 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
         {/* Render Layer Content Based on Type */}
         {layer.type === 'image' && (
           <div className="relative w-full h-full bg-[#101012] pattern-grid-lg">
-            {/* Thumbnail layer (shown when zoomed out) */}
-            {layer.thumbnail && (
+            {/* Conditional rendering: only one image in DOM at a time */}
+            {(!shouldShowFullRes || !fullResLoaded) && layer.thumbnail ? (
               <img
                 src={layer.thumbnail}
                 alt=""
                 className="absolute inset-0 w-full h-full object-contain pointer-events-none"
                 style={{
-                  transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`,
-                  opacity: (shouldShowFullRes && fullResLoaded) ? 0 : 1,
-                  transition: 'opacity 150ms ease-out'
+                  transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`
                 }}
                 draggable={false}
               />
+            ) : (
+              <img
+                src={layer.src}
+                alt={layer.title}
+                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                style={{
+                  transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`
+                }}
+                draggable={false}
+                onLoad={() => setFullResLoaded(true)}
+              />
             )}
-            {/* Full-res layer (shown when zoomed in or no thumbnail) */}
-            <img
-              src={layer.src}
-              alt={layer.title}
-              className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-              style={{
-                transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`,
-                opacity: (!layer.thumbnail || (shouldShowFullRes && fullResLoaded)) ? 1 : 0,
-                transition: 'opacity 150ms ease-out'
-              }}
-              draggable={false}
-              onLoad={() => setFullResLoaded(true)}
-            />
+            {/* Hidden preloader: load full-res in background when needed */}
+            {shouldShowFullRes && !fullResLoaded && layer.thumbnail && (
+              <img
+                src={layer.src}
+                alt=""
+                className="hidden"
+                onLoad={() => setFullResLoaded(true)}
+              />
+            )}
           </div>
         )}
         
@@ -1330,4 +1335,15 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   );
 };
 
-export default CanvasLayer;
+// Memoize to prevent re-renders when parent state changes but this layer's props haven't
+export default React.memo(CanvasLayer, (prev, next) => {
+  // Return true if props are equal (should NOT re-render)
+  return (
+    prev.layer === next.layer &&
+    prev.isSelected === next.isSelected &&
+    prev.scale === next.scale &&
+    prev.isGenerating === next.isGenerating &&
+    prev.generationTask === next.generationTask &&
+    prev.injectedAttachment === next.injectedAttachment
+  );
+});

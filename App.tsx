@@ -1,9 +1,10 @@
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { LayerData, ModelId, Attachment, MediaType, VideoMode, Annotation, GenerationTask } from './types';
 import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle, GenerationCallbacks } from './services/geminiService';
 import { saveLayers, loadLayers, saveViewState, loadViewState, saveHistory, loadHistory, clearAllData } from './services/storageService';
 import { generateThumbnail } from './services/thumbnailService';
+import { storeAsset, getAssetUrl } from './services/assetStore';
 import PromptBar from './components/PromptBar';
 import CanvasLayer from './components/CanvasLayer';
 import Sidebar from './components/Sidebar';
@@ -350,12 +351,27 @@ const App: React.FC = () => {
                 const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
                 result = imageRes; title = genTitle;
             }
-            // Generate thumbnail for images
+            // Store in asset store for images (blob-based for performance)
+            let finalSrc = result.url;
             let thumbnail: string | undefined;
+            let imageId: string | undefined;
+            let thumbnailId: string | undefined;
             if (mediaType === 'image' && result.url) {
-                try { thumbnail = await generateThumbnail(result.url); } catch (e) { console.warn('Thumbnail generation failed:', e); }
+                try {
+                  const thumbnailBase64 = await generateThumbnail(result.url);
+                  [imageId, thumbnailId] = await Promise.all([
+                    storeAsset(result.url),
+                    storeAsset(thumbnailBase64)
+                  ]);
+                  const [imageUrl, thumbUrl] = await Promise.all([
+                    getAssetUrl(imageId),
+                    getAssetUrl(thumbnailId)
+                  ]);
+                  finalSrc = imageUrl || result.url;
+                  thumbnail = thumbUrl;
+                } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: result.url, thumbnail, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
             // Remove completed task
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         } catch (error: any) {
@@ -438,11 +454,27 @@ const App: React.FC = () => {
                 const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
                 result = imageRes; title = genTitle;
             }
+            // Store in asset store for images (blob-based for performance)
+            let finalSrc = result.url;
             let thumbnail: string | undefined;
+            let imageId: string | undefined;
+            let thumbnailId: string | undefined;
             if (mediaType === 'image' && result.url) {
-                try { thumbnail = await generateThumbnail(result.url); } catch (e) { console.warn('Thumbnail generation failed:', e); }
+                try {
+                  const thumbnailBase64 = await generateThumbnail(result.url);
+                  [imageId, thumbnailId] = await Promise.all([
+                    storeAsset(result.url),
+                    storeAsset(thumbnailBase64)
+                  ]);
+                  const [imageUrl, thumbUrl] = await Promise.all([
+                    getAssetUrl(imageId),
+                    getAssetUrl(thumbnailId)
+                  ]);
+                  finalSrc = imageUrl || result.url;
+                  thumbnail = thumbUrl;
+                } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: result.url, thumbnail, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
             if (requestCount === 1 && idx === 0) setSelectedLayerId(placeholder.id);
         } catch (error: any) {
@@ -798,10 +830,38 @@ const App: React.FC = () => {
             const base64 = event.target?.result as string; const img = new Image();
             img.onload = async () => {
                 let w = img.naturalWidth; let h = img.naturalHeight; const MAX = 400; if (w > MAX || h > MAX) { if (w > h) { h = (h / w) * MAX; w = MAX; } else { w = (w / h) * MAX; h = MAX; } }
-                // Generate thumbnail for uploaded image
-                let thumbnail: string | undefined;
-                try { thumbnail = await generateThumbnail(base64); } catch (e) { console.warn('Thumbnail generation failed:', e); }
-                const newLayer: LayerData = { id: crypto.randomUUID(), type: 'image', x: dropX - (w/2), y: dropY - (h/2), width: w, height: h, src: base64, thumbnail, title: file.name.replace(/\.[^/.]+$/, ""), createdAt: Date.now(), promptUsed: "Uploaded Image" };
+                // Store image in asset store (blob-based) for performance
+                let imageId: string | undefined;
+                let thumbnailId: string | undefined;
+                let thumbnailUrl: string | undefined;
+                let imageUrl: string | undefined;
+                try {
+                  const thumbnailBase64 = await generateThumbnail(base64);
+                  [imageId, thumbnailId] = await Promise.all([
+                    storeAsset(base64),
+                    storeAsset(thumbnailBase64)
+                  ]);
+                  // Get blob URLs for immediate display
+                  [imageUrl, thumbnailUrl] = await Promise.all([
+                    getAssetUrl(imageId),
+                    getAssetUrl(thumbnailId)
+                  ]);
+                } catch (e) { console.warn('Asset storage failed, falling back to inline:', e); }
+                const newLayer: LayerData = {
+                  id: crypto.randomUUID(),
+                  type: 'image',
+                  x: dropX - (w/2),
+                  y: dropY - (h/2),
+                  width: w,
+                  height: h,
+                  src: imageUrl || base64,
+                  thumbnail: thumbnailUrl,
+                  imageId,
+                  thumbnailId,
+                  title: file.name.replace(/\.[^/.]+$/, ""),
+                  createdAt: Date.now(),
+                  promptUsed: "Uploaded Image"
+                };
                 setLayers(prev => { const next = [...prev, newLayer]; addToHistory(next); return next; }); setSelectedLayerId(newLayer.id);
             }; img.src = base64;
         }; reader.readAsDataURL(file);
@@ -821,9 +881,32 @@ const App: React.FC = () => {
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
   const handleBackgroundClick = (e: React.MouseEvent) => { if (e.target === e.currentTarget && !isSelectionMode) setSelectedLayerId(null); };
   const [isPanning, setIsPanning] = useState(false); const panStartRef = useRef({ x: 0, y: 0 });
+  // RAF batching for smooth pan performance
+  const pendingOffsetRef = useRef<{x: number, y: number} | null>(null);
+  const rafIdRef = useRef<number>(0);
   const handleCanvasMouseDown = (e: React.MouseEvent) => { if (e.button === 1 || (e.button === 0 && e.shiftKey)) { e.preventDefault(); setIsPanning(true); panStartRef.current = { x: e.clientX, y: e.clientY }; } else { handleBackgroundClick(e); } };
-  const handleCanvasMouseMove = (e: React.MouseEvent) => { if (isPanning) { const dx = e.clientX - panStartRef.current.x; const dy = e.clientY - panStartRef.current.y; setCanvasOffset(prev => ({ x: prev.x + dx, y: prev.y + dy })); panStartRef.current = { x: e.clientX, y: e.clientY }; } };
-  const handleCanvasMouseUp = () => { setIsPanning(false); };
+  const handleCanvasMouseMove = (e: React.MouseEvent) => {
+    if (isPanning) {
+      const dx = e.clientX - panStartRef.current.x;
+      const dy = e.clientY - panStartRef.current.y;
+      panStartRef.current = { x: e.clientX, y: e.clientY };
+      // Accumulate deltas in ref, batch via RAF
+      pendingOffsetRef.current = {
+        x: (pendingOffsetRef.current?.x ?? canvasOffset.x) + dx,
+        y: (pendingOffsetRef.current?.y ?? canvasOffset.y) + dy
+      };
+      if (!rafIdRef.current) {
+        rafIdRef.current = requestAnimationFrame(() => {
+          if (pendingOffsetRef.current) {
+            setCanvasOffset(pendingOffsetRef.current);
+            pendingOffsetRef.current = null;
+          }
+          rafIdRef.current = 0;
+        });
+      }
+    }
+  };
+  const handleCanvasMouseUp = () => { setIsPanning(false); if (rafIdRef.current) { cancelAnimationFrame(rafIdRef.current); rafIdRef.current = 0; } };
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -841,6 +924,40 @@ const App: React.FC = () => {
     }
   };
   const zoomIn = () => setScale(s => Math.min(s + 0.1, 5)); const zoomOut = () => setScale(s => Math.max(s - 0.1, 0.1));
+
+  // Viewport culling: only render layers that are visible or near the viewport
+  const visibleLayers = useMemo(() => {
+    // Use window dimensions for viewport size
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080;
+
+    // Convert viewport to world coordinates
+    const viewLeft = -canvasOffset.x / scale;
+    const viewTop = -canvasOffset.y / scale;
+    const viewRight = viewLeft + viewportWidth / scale;
+    const viewBottom = viewTop + viewportHeight / scale;
+
+    // Add margin for preloading nearby layers (500px in world units)
+    const margin = 500;
+
+    return layers.filter(layer => {
+      // Always show selected layer
+      if (layer.id === selectedLayerId) return true;
+      // Always show layers that are loading (they have UI that shouldn't disappear)
+      if (layer.isLoading) return true;
+
+      // Check if layer intersects with expanded viewport
+      const layerRight = layer.x + layer.width;
+      const layerBottom = layer.y + layer.height;
+
+      return !(
+        layerRight < viewLeft - margin ||
+        layer.x > viewRight + margin ||
+        layerBottom < viewTop - margin ||
+        layer.y > viewBottom + margin
+      );
+    });
+  }, [layers, canvasOffset, scale, selectedLayerId]);
 
   return (
     <div className={`w-screen h-screen bg-background relative overflow-hidden flex flex-col ${isSelectionMode ? 'cursor-crosshair' : ''}`}>
@@ -863,7 +980,8 @@ const App: React.FC = () => {
              </div>
         )}
         <div style={{ transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '100%', height: '100%', pointerEvents: 'none' }} className="absolute top-0 left-0">
-            {layers.map(layer => (
+            {/* Viewport culling: only render visible layers */}
+            {visibleLayers.map(layer => (
             <div key={layer.id} className="pointer-events-auto">
                  <CanvasLayer
                     layer={layer}

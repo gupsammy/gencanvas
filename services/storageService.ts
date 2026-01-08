@@ -1,5 +1,6 @@
 import { LayerData } from '../types';
 import { generateThumbnail } from './thumbnailService';
+import { storeAsset, getAssetUrl } from './assetStore';
 
 const DB_NAME = 'gemini-canvas-db';
 const DB_VERSION = 2;
@@ -38,10 +39,23 @@ function initDB(): Promise<IDBDatabase> {
 export async function saveLayers(layers: LayerData[]): Promise<void> {
   try {
     const db = await initDB();
+    // Strip blob URLs when asset IDs exist (blob URLs are runtime-only)
+    const layersForStorage = layers.map(layer => {
+      if (layer.imageId || layer.thumbnailId) {
+        const { src, thumbnail, ...rest } = layer;
+        return {
+          ...rest,
+          // Keep src empty or as placeholder when using asset store
+          src: layer.imageId ? '' : src,
+          thumbnail: layer.thumbnailId ? undefined : thumbnail,
+        } as LayerData;
+      }
+      return layer;
+    });
     return new Promise((resolve, reject) => {
       const tx = db.transaction(LAYERS_STORE, 'readwrite');
       const store = tx.objectStore(LAYERS_STORE);
-      store.put(layers, 'current');
+      store.put(layersForStorage, 'current');
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -63,30 +77,80 @@ export async function loadLayers(): Promise<LayerData[] | null> {
 
     if (!layers) return null;
 
-    // Migrate layers without thumbnails (backward compatibility)
+    // Process layers: resolve asset IDs and migrate old inline Base64
     let needsSave = false;
-    const migratedLayers = await Promise.all(
+    const processedLayers = await Promise.all(
       layers.map(async (layer) => {
-        if (layer.type === 'image' && layer.src && !layer.thumbnail) {
+        let updated = { ...layer };
+
+        // Resolve asset IDs to blob URLs
+        if (layer.imageId) {
           try {
-            const thumbnail = await generateThumbnail(layer.src);
-            needsSave = true;
-            return { ...layer, thumbnail };
+            const url = await getAssetUrl(layer.imageId);
+            if (url) updated.src = url;
           } catch (e) {
-            console.warn('Failed to generate thumbnail for layer', layer.id, e);
-            return layer;
+            console.warn('Failed to load asset for layer', layer.id, e);
           }
         }
-        return layer;
+        if (layer.thumbnailId) {
+          try {
+            const url = await getAssetUrl(layer.thumbnailId);
+            if (url) updated.thumbnail = url;
+          } catch (e) {
+            console.warn('Failed to load thumbnail asset for layer', layer.id, e);
+          }
+        }
+
+        // Migrate old layers with inline Base64 to asset store
+        if (layer.type === 'image' && layer.src && !layer.imageId && layer.src.startsWith('data:')) {
+          try {
+            // Generate thumbnail if missing
+            let thumbnailBase64 = layer.thumbnail;
+            if (!thumbnailBase64) {
+              thumbnailBase64 = await generateThumbnail(layer.src);
+            }
+            // Store in asset store
+            const [imageId, thumbnailId] = await Promise.all([
+              storeAsset(layer.src),
+              thumbnailBase64 ? storeAsset(thumbnailBase64) : Promise.resolve(undefined)
+            ]);
+            // Get blob URLs
+            const [imageUrl, thumbUrl] = await Promise.all([
+              getAssetUrl(imageId),
+              thumbnailId ? getAssetUrl(thumbnailId) : Promise.resolve(undefined)
+            ]);
+            updated = {
+              ...updated,
+              imageId,
+              thumbnailId,
+              src: imageUrl || layer.src,
+              thumbnail: thumbUrl || thumbnailBase64
+            };
+            needsSave = true;
+          } catch (e) {
+            console.warn('Failed to migrate layer to asset store', layer.id, e);
+            // Fallback: at least generate thumbnail if missing
+            if (!layer.thumbnail && layer.src) {
+              try {
+                updated.thumbnail = await generateThumbnail(layer.src);
+                needsSave = true;
+              } catch (e2) {
+                console.warn('Thumbnail generation also failed', e2);
+              }
+            }
+          }
+        }
+
+        return updated;
       })
     );
 
     // Save migrated layers back if any were updated
     if (needsSave) {
-      await saveLayers(migratedLayers);
+      await saveLayers(processedLayers);
     }
 
-    return migratedLayers;
+    return processedLayers;
   } catch (error) {
     console.error('Failed to load layers:', error);
     return null;
@@ -130,6 +194,19 @@ export async function loadViewState(): Promise<{
   }
 }
 
+// Helper to strip blob URLs for storage
+function stripBlobUrlsFromLayer(layer: LayerData): LayerData {
+  if (layer.imageId || layer.thumbnailId) {
+    const { src, thumbnail, ...rest } = layer;
+    return {
+      ...rest,
+      src: layer.imageId ? '' : src,
+      thumbnail: layer.thumbnailId ? undefined : thumbnail,
+    } as LayerData;
+  }
+  return layer;
+}
+
 export async function saveHistory(
   history: LayerData[][],
   historyIndex: number
@@ -140,10 +217,15 @@ export async function saveHistory(
     const trimmedHistory = history.slice(-MAX_HISTORY_STATES);
     const adjustedIndex = Math.max(0, historyIndex - (history.length - trimmedHistory.length));
 
+    // Strip blob URLs from history to keep storage small
+    const historyForStorage = trimmedHistory.map(layers =>
+      layers.map(stripBlobUrlsFromLayer)
+    );
+
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STATE_STORE, 'readwrite');
       const store = tx.objectStore(STATE_STORE);
-      store.put({ history: trimmedHistory, index: adjustedIndex }, 'history');
+      store.put({ history: historyForStorage, index: adjustedIndex }, 'history');
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
