@@ -4,7 +4,7 @@ import { LayerData, ModelId, Attachment, MediaType, VideoMode, Annotation, Gener
 import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle, GenerationCallbacks } from './services/geminiService';
 import { saveLayers, loadLayers, saveViewState, loadViewState, saveHistory, loadHistory, clearAllData } from './services/storageService';
 import { generateThumbnail } from './services/thumbnailService';
-import { storeAsset, getAssetUrl, getAssetBase64 } from './services/assetStore';
+import { storeAsset, getAssetUrl } from './services/assetStore';
 import PromptBar from './components/PromptBar';
 import CanvasLayer from './components/CanvasLayer';
 import Sidebar from './components/Sidebar';
@@ -48,6 +48,7 @@ const App: React.FC = () => {
 
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectionTarget, setSelectionTarget] = useState<'global' | 'layer' | null>(null);
+  const [selectionOriginLayerId, setSelectionOriginLayerId] = useState<string | null>(null);
   const [injectedAttachment, setInjectedAttachment] = useState<Attachment | null>(null);
   const [snapLines, setSnapLines] = useState<{ vertical?: number, horizontal?: number } | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -121,7 +122,16 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo, isSelectionMode]);
 
-  useEffect(() => { setInjectedAttachment(null); }, [selectedLayerId]);
+  // Clear selection origin when layer changes (abort any pending injection)
+  useEffect(() => {
+      setInjectedAttachment(null);
+      setSelectionOriginLayerId(null);
+  }, [selectedLayerId]);
+
+  const clearInjectedAttachment = useCallback(() => {
+      setInjectedAttachment(null);
+      setSelectionOriginLayerId(null);
+  }, []);
 
   // Hydrate state from IndexedDB on mount
   useEffect(() => {
@@ -214,21 +224,18 @@ const App: React.FC = () => {
       return getClosestAspectRatio(layer.width, layer.height);
   };
 
-  const startCanvasSelection = (target: 'global' | 'layer') => { setIsSelectionMode(true); setSelectionTarget(target); };
-  const handleLayerSelectForAttachment = async (layer: LayerData) => {
+  const startCanvasSelection = (target: 'global' | 'layer') => {
+      setIsSelectionMode(true);
+      setSelectionTarget(target);
+      // Store which layer initiated the selection so we can inject the attachment back to it
+      if (target === 'layer') setSelectionOriginLayerId(selectedLayerId);
+  };
+  const handleLayerSelectForAttachment = (layer: LayerData) => {
       if (!isSelectionMode) return;
       if (layer.type === 'video') alert("Selecting video layers as reference is not fully supported for all models yet.");
-      // Get base64 data - either from asset store or directly from src (for legacy layers)
-      let base64Data = layer.src;
-      if (layer.imageId) {
-          const assetBase64 = await getAssetBase64(layer.imageId);
-          if (assetBase64) base64Data = assetBase64;
-      }
-      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
-      if (selectionTarget === 'global') setGlobalAttachments(prev => [...prev, attachment]);
-      else if (selectionTarget === 'layer') setInjectedAttachment(attachment);
-      setIsSelectionMode(false);
-      setSelectionTarget(null);
+      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: layer.src };
+      if (selectionTarget === 'global') setGlobalAttachments(prev => [...prev, attachment]); else if (selectionTarget === 'layer') setInjectedAttachment(attachment);
+      setIsSelectionMode(false); setSelectionTarget(null);
   };
 
   const handleClearCanvas = async () => {
@@ -544,13 +551,7 @@ const App: React.FC = () => {
 
   const handleRemoveBackground = async (layerId: string) => {
       const layer = layers.find(l => l.id === layerId); if (!layer || layer.type === 'video') return;
-      // Get base64 from asset store if available
-      let base64Data = layer.src;
-      if (layer.imageId) {
-          const assetBase64 = await getAssetBase64(layer.imageId);
-          if (assetBase64) base64Data = assetBase64;
-      }
-      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], "layer.png"), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
+      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], "layer.png"), previewUrl: layer.src, mimeType: 'image/png', base64: layer.src };
       await handleLayerGenerate(layerId, "Remove the background. Keep subject.", [attachment], ModelId.GEMINI_2_5_FLASH_IMAGE, "Auto", 30, "1K", "720p", "image", "6", "standard", -1);
   };
 
@@ -831,20 +832,7 @@ const App: React.FC = () => {
   }, [layers]);
   const renameLayer = useCallback((id: string, newTitle: string) => { setLayers(prev => { const next = prev.map(l => l.id === id ? { ...l, title: newTitle } : l); addToHistory(next); return next; }); }, [addToHistory]);
   const flipLayer = useCallback((id: string, axis: 'x' | 'y') => { setLayers(prev => { const next = prev.map(l => l.id !== id ? l : { ...l, flipX: axis === 'x' ? !l.flipX : l.flipX, flipY: axis === 'y' ? !l.flipY : l.flipY }); addToHistory(next); return next; }); }, [addToHistory]);
-  const handleAddAsReference = useCallback(async (layerId: string) => {
-      const layer = layers.find(l => l.id === layerId);
-      if (!layer || layer.type === 'video') return;
-      // Get base64 from asset store if available
-      let base64Data = layer.src;
-      if (layer.imageId) {
-          const assetBase64 = await getAssetBase64(layer.imageId);
-          if (assetBase64) base64Data = assetBase64;
-      }
-      const newAttachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
-      setGlobalAttachments(prev => [...prev, newAttachment]);
-      setSelectedLayerId(null);
-      setTimeout(() => promptInputRef.current?.focus(), 50);
-  }, [layers]);
+  const handleAddAsReference = useCallback((layerId: string) => { const layer = layers.find(l => l.id === layerId); if (!layer || layer.type === 'video') return; const newAttachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: layer.src }; setGlobalAttachments(prev => [...prev, newAttachment]); setSelectedLayerId(null); setTimeout(() => promptInputRef.current?.focus(), 50); }, [layers]);
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -1035,7 +1023,9 @@ const App: React.FC = () => {
                     generationTask={getTaskForLayer(layer.id)}
                     onCancelGeneration={() => cancelGeneration(layer.id)}
                     onSelectOnCanvasStart={() => startCanvasSelection('layer')}
-                    injectedAttachment={selectedLayerId === layer.id ? injectedAttachment : null}
+                    injectedAttachment={selectionOriginLayerId === layer.id ? injectedAttachment : null}
+                    onInjectedAttachmentConsumed={clearInjectedAttachment}
+                    isSelectionMode={isSelectionMode}
                 />
             </div>
             ))}

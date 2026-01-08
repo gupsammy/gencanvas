@@ -2,7 +2,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { LayerData, Attachment, ModelId, MediaType, VideoMode, Annotation, PromptState, GenerationTask } from '../types';
 import { DEFAULT_MODEL, STICKY_COLORS, GROUP_COLORS } from '../constants';
-import { getAssetBase64 } from '../services/assetStore';
 import PromptBar from './PromptBar';
 import {
     Move, Trash2, MoreHorizontal, Copy, FlipHorizontal,
@@ -53,6 +52,8 @@ interface CanvasLayerProps {
   onCancelGeneration?: () => void;
   onSelectOnCanvasStart?: () => void;
   injectedAttachment?: Attachment | null;
+  onInjectedAttachmentConsumed?: () => void;
+  isSelectionMode?: boolean;
 }
 
 const DRAWING_COLORS = ['#FFFFFF', '#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#6366F1', '#8B5CF6', '#EC4899', '#000000'];
@@ -100,7 +101,9 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   generationTask,
   onCancelGeneration,
   onSelectOnCanvasStart,
-  injectedAttachment
+  injectedAttachment,
+  onInjectedAttachmentConsumed,
+  isSelectionMode = false
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -142,6 +145,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const stickyInputRef = useRef<HTMLTextAreaElement>(null);
 
   // Floating Bar State
+  const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const [promptAttachments, setPromptAttachments] = useState<Attachment[]>([]);
   const [draftState, setDraftState] = useState<Partial<PromptState>>(() => ({
       prompt: layer.promptUsed || '',
@@ -154,20 +158,6 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       videoMode: layer.generationMetadata?.videoMode || 'standard',
       voice: layer.generationMetadata?.voice || 'Kore'
   }));
-
-  // Resolved base64 for API calls (fetched from asset store if available)
-  const [resolvedBase64, setResolvedBase64] = useState<string>(layer.src);
-
-  // Fetch actual base64 from asset store when layer has imageId
-  useEffect(() => {
-      if (layer.imageId) {
-          getAssetBase64(layer.imageId).then(base64 => {
-              if (base64) setResolvedBase64(base64);
-          });
-      } else {
-          setResolvedBase64(layer.src);
-      }
-  }, [layer.imageId, layer.src]);
 
   // Memoized callback to prevent infinite loops
   const handleDraftStateChange = useCallback((updates: Partial<PromptState>) => {
@@ -238,12 +228,18 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       setShowColorPicker(false);
   }, [tool]);
 
-  // Handle Injected Attachments
+  // Handle Injected Attachments (from canvas selection mode)
   useEffect(() => {
-      if (injectedAttachment && isSelected) {
+      if (injectedAttachment) {
           setPromptAttachments(prev => [...prev, injectedAttachment]);
+          // Signal that the attachment has been consumed
+          onInjectedAttachmentConsumed?.();
+          // Focus the prompt input after a brief delay to ensure UI is ready
+          requestAnimationFrame(() => {
+              promptInputRef.current?.focus();
+          });
       }
-  }, [injectedAttachment, isSelected]);
+  }, [injectedAttachment, onInjectedAttachmentConsumed]);
 
 
   useEffect(() => {
@@ -609,18 +605,22 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   // ... [Dragging Handler]
   const handleMouseDown = (e: React.MouseEvent) => {
     if (tool !== 'cursor') return;
-    if (layer.isLoading || layer.error) return; 
-    if (isResizingMode || isResizingLayer || isResizingCrop) return; 
+    if (layer.isLoading || layer.error) return;
+    if (isResizingMode || isResizingLayer || isResizingCrop) return;
     if ((e.target as HTMLElement).closest('.layer-controls')) return;
     if ((e.target as HTMLElement).closest('.video-controls')) return;
     if ((e.target as HTMLElement).closest('.annotation-overlay')) return;
     if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
-    
+
     e.stopPropagation();
     onSelect(layer.id);
     setShowMenu(false);
-    setIsDragging(true);
     setSelectedAnnotationId(null);
+
+    // In selection mode, just select - don't start dragging
+    if (isSelectionMode) return;
+
+    setIsDragging(true);
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     initialLayerPosRef.current = { x: layer.x, y: layer.y };
   };
@@ -802,7 +802,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       setIsResizingMode(false);
   };
   
-  const layerAttachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: layer.src, mimeType: layer.type === 'video' ? 'video/mp4' : 'image/png', base64: resolvedBase64 };
+  const layerAttachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: layer.src, mimeType: layer.type === 'video' ? 'video/mp4' : 'image/png', base64: layer.src };
 
   if (layer.isLoading) {
     const progress = generationTask?.progress || 0;
@@ -882,7 +882,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const showTextSizeTools = (layer.type === 'sticky' || layer.type === 'text') && onUpdateFontSize;
 
   return (
-    <div ref={layerRef} className="absolute transition-shadow duration-200 group" style={{ left: layer.x, top: layer.y, zIndex, touchAction: 'none' }} onMouseDown={handleMouseDown}>
+    <div ref={layerRef} className={`absolute transition-shadow duration-200 group ${isSelectionMode ? 'cursor-crosshair' : ''}`} style={{ left: layer.x, top: layer.y, zIndex, touchAction: 'none' }} onMouseDown={handleMouseDown}>
       {isSelected && !isResizingMode && tool === 'cursor' && (
           <>
              <div className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border border-primary rounded-full cursor-nw-resize z-50 hover:scale-125 transition-transform" onMouseDown={(e) => handleResizeStart(e, 'nw')} />
@@ -1109,10 +1109,11 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       )}
 
       <div 
-        className={`relative rounded-lg overflow-hidden select-none transition-colors
+        className={`relative rounded-lg overflow-hidden select-none transition-all duration-150
           ${isSelected && !isResizingMode ? 'ring-2 ring-primary shadow-2xl shadow-black/50' : ''}
-          ${!isSelected && !isResizingMode ? 'hover:ring-1 hover:ring-border shadow-xl' : ''}
-          ${isExtendingMode ? 'ring-2 ring-yellow-500' : ''} 
+          ${!isSelected && !isResizingMode && !isSelectionMode ? 'hover:ring-1 hover:ring-border shadow-xl' : ''}
+          ${!isSelected && isSelectionMode ? 'hover:ring-2 hover:ring-primary/70 hover:shadow-lg hover:shadow-primary/20 hover:scale-[1.01]' : ''}
+          ${isExtendingMode ? 'ring-2 ring-yellow-500' : ''}
           ${layer.type === 'group' ? 'border-2 border-dashed' : 'bg-surface'}
         `}
         style={{
@@ -1343,7 +1344,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
 
       {isSelected && !isResizingMode && !isResizingLayer && (layer.type === 'image' || layer.type === 'video') && (
         <div className="absolute top-full left-1/2 mt-4 z-50 layer-controls animate-in fade-in slide-in-from-top-2 duration-200 origin-top" style={{ transform: `translateX(-50%) scale(${1 / scale})` }}>
-           <PromptBar variant="floating" onSubmit={handlePromptSubmit} isGenerating={isGenerating} initialValues={draftState} onStateChange={handleDraftStateChange} contextAttachments={!isExtendingMode && layer.type === 'image' ? [layerAttachment] : []} attachments={promptAttachments} onAttachmentsChange={setPromptAttachments} onSelectOnCanvasStart={onSelectOnCanvasStart} placeholder={isExtendingMode ? "Describe how to extend this video..." : (layer.type === 'video' ? "Remix this video..." : "Edit or remix this image...")} onCancel={() => onSelect('')} isExtension={isExtendingMode} />
+           <PromptBar variant="floating" onSubmit={handlePromptSubmit} isGenerating={isGenerating} initialValues={draftState} onStateChange={handleDraftStateChange} contextAttachments={!isExtendingMode && layer.type === 'image' ? [layerAttachment] : []} attachments={promptAttachments} onAttachmentsChange={setPromptAttachments} onSelectOnCanvasStart={onSelectOnCanvasStart} placeholder={isExtendingMode ? "Describe how to extend this video..." : (layer.type === 'video' ? "Remix this video..." : "Edit or remix this image...")} onCancel={() => onSelect('')} isExtension={isExtendingMode} inputRef={promptInputRef} />
         </div>
       )}
     </div>
@@ -1359,6 +1360,7 @@ export default React.memo(CanvasLayer, (prev, next) => {
     prev.scale === next.scale &&
     prev.isGenerating === next.isGenerating &&
     prev.generationTask === next.generationTask &&
-    prev.injectedAttachment === next.injectedAttachment
+    prev.injectedAttachment === next.injectedAttachment &&
+    prev.isSelectionMode === next.isSelectionMode
   );
 });
