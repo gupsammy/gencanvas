@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { LayerData, Attachment, ModelId, MediaType, VideoMode, Annotation, PromptState, GenerationTask } from '../types';
 import { DEFAULT_MODEL, STICKY_COLORS, GROUP_COLORS } from '../constants';
+import { getAssetBase64 } from '../services/assetStore';
 import PromptBar from './PromptBar';
 import {
     Move, Trash2, MoreHorizontal, Copy, FlipHorizontal,
@@ -158,6 +159,20 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       videoMode: layer.generationMetadata?.videoMode || 'standard',
       voice: layer.generationMetadata?.voice || 'Kore'
   }));
+
+  // Resolved base64 for API calls (fetched from asset store if available)
+  const [resolvedBase64, setResolvedBase64] = useState<string>(layer.src);
+
+  // Fetch actual base64 from asset store when layer has imageId
+  useEffect(() => {
+      if (layer.imageId) {
+          getAssetBase64(layer.imageId).then(base64 => {
+              if (base64) setResolvedBase64(base64);
+          });
+      } else {
+          setResolvedBase64(layer.src);
+      }
+  }, [layer.imageId, layer.src]);
 
   // Memoized callback to prevent infinite loops
   const handleDraftStateChange = useCallback((updates: Partial<PromptState>) => {
@@ -802,7 +817,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       setIsResizingMode(false);
   };
   
-  const layerAttachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: layer.src, mimeType: layer.type === 'video' ? 'video/mp4' : 'image/png', base64: layer.src };
+  const layerAttachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: layer.src, mimeType: layer.type === 'video' ? 'video/mp4' : 'image/png', base64: resolvedBase64 };
 
   if (layer.isLoading) {
     const progress = generationTask?.progress || 0;

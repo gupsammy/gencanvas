@@ -4,12 +4,14 @@ import { LayerData, ModelId, Attachment, MediaType, VideoMode, Annotation, Gener
 import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle, GenerationCallbacks } from './services/geminiService';
 import { saveLayers, loadLayers, saveViewState, loadViewState, saveHistory, loadHistory, clearAllData } from './services/storageService';
 import { generateThumbnail } from './services/thumbnailService';
-import { storeAsset, getAssetUrl } from './services/assetStore';
+import { storeAsset, getAssetUrl, getAssetBase64 } from './services/assetStore';
+import { hasStoredApiKey, setStoredApiKey } from './services/apiKeyService';
 import PromptBar from './components/PromptBar';
 import CanvasLayer from './components/CanvasLayer';
 import Sidebar from './components/Sidebar';
 import Minimap from './components/Minimap';
-import { Image as ImageIcon, ZoomIn, ZoomOut, MousePointer2, Undo2, Redo2, StickyNote, BoxSelect, Pencil, Type as TypeIcon, Trash2 } from 'lucide-react';
+import ApiKeyModal from './components/ApiKeyModal';
+import { Image as ImageIcon, ZoomIn, ZoomOut, MousePointer2, Undo2, Redo2, StickyNote, BoxSelect, Pencil, Type as TypeIcon, Trash2, Key } from 'lucide-react';
 import { STICKY_COLORS, GROUP_COLORS } from './constants';
 
 // A simple 1x1 transparent pixel for placeholders
@@ -52,6 +54,8 @@ const App: React.FC = () => {
   const [injectedAttachment, setInjectedAttachment] = useState<Attachment | null>(null);
   const [snapLines, setSnapLines] = useState<{ vertical?: number, horizontal?: number } | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [isChangingApiKey, setIsChangingApiKey] = useState(false);
 
   const fileDropRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
@@ -155,6 +159,10 @@ const App: React.FC = () => {
         console.error('Failed to hydrate state:', error);
       }
       setIsHydrated(true);
+      // Check for API key after hydration
+      if (!hasStoredApiKey()) {
+        setShowApiKeyModal(true);
+      }
     };
     hydrate();
   }, []);
@@ -224,16 +232,34 @@ const App: React.FC = () => {
       return getClosestAspectRatio(layer.width, layer.height);
   };
 
+  // API Key management
+  const handleApiKeySubmit = (key: string) => {
+    setStoredApiKey(key);
+    setShowApiKeyModal(false);
+    setIsChangingApiKey(false);
+  };
+
+  const handleChangeApiKey = () => {
+    setIsChangingApiKey(true);
+    setShowApiKeyModal(true);
+  };
+
   const startCanvasSelection = (target: 'global' | 'layer') => {
       setIsSelectionMode(true);
       setSelectionTarget(target);
       // Store which layer initiated the selection so we can inject the attachment back to it
       if (target === 'layer') setSelectionOriginLayerId(selectedLayerId);
   };
-  const handleLayerSelectForAttachment = (layer: LayerData) => {
+  const handleLayerSelectForAttachment = async (layer: LayerData) => {
       if (!isSelectionMode) return;
       if (layer.type === 'video') alert("Selecting video layers as reference is not fully supported for all models yet.");
-      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: layer.src };
+      // Get base64 from asset store if available (blob URLs don't work for API calls)
+      let base64Data = layer.src;
+      if (layer.imageId) {
+          const assetBase64 = await getAssetBase64(layer.imageId);
+          if (assetBase64) base64Data = assetBase64;
+      }
+      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
       if (selectionTarget === 'global') setGlobalAttachments(prev => [...prev, attachment]); else if (selectionTarget === 'layer') setInjectedAttachment(attachment);
       setIsSelectionMode(false); setSelectionTarget(null);
   };
@@ -551,7 +577,13 @@ const App: React.FC = () => {
 
   const handleRemoveBackground = async (layerId: string) => {
       const layer = layers.find(l => l.id === layerId); if (!layer || layer.type === 'video') return;
-      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], "layer.png"), previewUrl: layer.src, mimeType: 'image/png', base64: layer.src };
+      // Get base64 from asset store if available (blob URLs don't work for API calls)
+      let base64Data = layer.src;
+      if (layer.imageId) {
+          const assetBase64 = await getAssetBase64(layer.imageId);
+          if (assetBase64) base64Data = assetBase64;
+      }
+      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], "layer.png"), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
       await handleLayerGenerate(layerId, "Remove the background. Keep subject.", [attachment], ModelId.GEMINI_2_5_FLASH_IMAGE, "Auto", 30, "1K", "720p", "image", "6", "standard", -1);
   };
 
@@ -832,7 +864,20 @@ const App: React.FC = () => {
   }, [layers]);
   const renameLayer = useCallback((id: string, newTitle: string) => { setLayers(prev => { const next = prev.map(l => l.id === id ? { ...l, title: newTitle } : l); addToHistory(next); return next; }); }, [addToHistory]);
   const flipLayer = useCallback((id: string, axis: 'x' | 'y') => { setLayers(prev => { const next = prev.map(l => l.id !== id ? l : { ...l, flipX: axis === 'x' ? !l.flipX : l.flipX, flipY: axis === 'y' ? !l.flipY : l.flipY }); addToHistory(next); return next; }); }, [addToHistory]);
-  const handleAddAsReference = useCallback((layerId: string) => { const layer = layers.find(l => l.id === layerId); if (!layer || layer.type === 'video') return; const newAttachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: layer.src }; setGlobalAttachments(prev => [...prev, newAttachment]); setSelectedLayerId(null); setTimeout(() => promptInputRef.current?.focus(), 50); }, [layers]);
+  const handleAddAsReference = useCallback(async (layerId: string) => {
+      const layer = layers.find(l => l.id === layerId);
+      if (!layer || layer.type === 'video') return;
+      // Get base64 from asset store if available (blob URLs don't work for API calls)
+      let base64Data = layer.src;
+      if (layer.imageId) {
+          const assetBase64 = await getAssetBase64(layer.imageId);
+          if (assetBase64) base64Data = assetBase64;
+      }
+      const newAttachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
+      setGlobalAttachments(prev => [...prev, newAttachment]);
+      setSelectedLayerId(null);
+      setTimeout(() => promptInputRef.current?.focus(), 50);
+  }, [layers]);
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -1066,6 +1111,7 @@ const App: React.FC = () => {
          <button onClick={createGroup} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary hover:scale-105 transition-all duration-200" title="Add Group Frame"><BoxSelect size={18} /></button>
          <button onClick={createDrawingLayer} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary hover:scale-105 transition-all duration-200" title="Add Drawing Layer"><Pencil size={18} /></button>
          <div className="w-full h-px bg-border my-1"></div>
+         <button onClick={handleChangeApiKey} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary hover:scale-105 transition-all duration-200" title="Change API Key"><Key size={18} /></button>
          <button onClick={handleClearCanvas} className="p-2 rounded-lg text-red-400/80 hover:bg-red-500/20 hover:text-red-400 hover:scale-105 transition-all duration-200" title="Clear Canvas"><Trash2 size={18} /></button>
       </div>
 
@@ -1085,6 +1131,14 @@ const App: React.FC = () => {
       />
 
       <Sidebar isOpen={isSidebarOpen} onToggle={() => setIsSidebarOpen(!isSidebarOpen)} layers={layers} selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} onRenameLayer={renameLayer} onLayerDoubleClick={handleLayerFocus} onDeleteLayer={deleteLayer} onExportLayer={exportLayer} onDuplicateLayer={duplicateLayer} />
+
+      {/* API Key Modal */}
+      <ApiKeyModal
+        isOpen={showApiKeyModal}
+        onSubmit={handleApiKeySubmit}
+        onClose={() => { setShowApiKeyModal(false); setIsChangingApiKey(false); }}
+        isChangingKey={isChangingApiKey}
+      />
     </div>
   );
 };

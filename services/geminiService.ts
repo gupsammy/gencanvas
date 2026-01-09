@@ -1,9 +1,25 @@
 
 import { GoogleGenAI, Part, Modality } from '@google/genai';
 import { ModelId, GenerateOptions, GenerationMetadata } from '../types';
+import { getStoredApiKey } from './apiKeyService';
 
-// Helper to get fresh client
-const getAiClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Helper to get fresh client - uses stored API key or falls back to env var
+const getAiClient = () => {
+  const apiKey = getStoredApiKey() || process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error('No API key configured. Please add your Gemini API key.');
+  }
+  return new GoogleGenAI({ apiKey });
+};
+
+// Export getter for API key (used in video download)
+export const getApiKey = (): string => {
+  const apiKey = getStoredApiKey() || process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error('No API key configured. Please add your Gemini API key.');
+  }
+  return apiKey;
+};
 
 export interface GenerationResult {
     url: string;
@@ -424,7 +440,7 @@ export const generateVideoContent = async (options: GenerateOptions, callbacks?:
     checkAbort(signal);
     onProgress?.(95);
 
-    const videoRes = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+    const videoRes = await fetch(`${downloadLink}&key=${getApiKey()}`);
     if (!videoRes.ok) {
        throw new Error(`Failed to download video: ${videoRes.statusText}`);
     }
