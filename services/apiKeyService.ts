@@ -1,4 +1,4 @@
-const API_KEY_STORAGE_KEY = 'aicanvas_gemini_api_key';
+const API_KEY_STORAGE_KEY = 'gencanvas_gemini_api_key';
 
 export const getStoredApiKey = (): string | null => {
   try {

@@ -1,6 +1,8 @@
-# AICanvas
+# GenCanvas
 
 An infinite canvas for AI-powered media generation. Create images, videos, and audio using Google's Gemini API on a pannable, zoomable workspace.
+
+**Live Demo:** https://gencanvas.netlify.app
 
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
@@ -24,8 +26,8 @@ An infinite canvas for AI-powered media generation. Create images, videos, and a
 
 ```bash
 # Clone the repository
-git clone https://github.com/gupsammy/AICanvas.git
-cd AICanvas
+git clone https://github.com/gupsammy/gencanvas.git
+cd gencanvas
 
 # Install dependencies
 npm install

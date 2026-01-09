@@ -1,4 +1,4 @@
-# AICanvas (Gemini Infinite Canvas)
+# GenCanvas
 
 React 19 + Vite infinite canvas for generating AI images, videos, and audio via Gemini API.
 

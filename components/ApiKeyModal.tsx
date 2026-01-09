@@ -68,7 +68,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSubmit, onClose, is
           </div>
           <div>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600, color: 'white' }}>
-              {isChangingKey ? 'Change API Key' : 'Welcome to AI Canvas'}
+              {isChangingKey ? 'Change API Key' : 'Welcome to GenCanvas'}
             </h2>
             <p style={{ margin: 0, fontSize: '14px', color: '#888' }}>
               Powered by Google Gemini

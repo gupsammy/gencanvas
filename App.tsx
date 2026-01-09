@@ -1033,7 +1033,7 @@ const App: React.FC = () => {
                         <div className="w-16 h-16 mx-auto mb-6 rounded-2xl bg-primary/10 flex items-center justify-center">
                             <ImageIcon size={32} className="text-primary" />
                         </div>
-                        <h2 className="text-2xl font-display font-bold text-text-primary">AI Canvas</h2>
+                        <h2 className="text-2xl font-display font-bold text-text-primary">GenCanvas</h2>
                         <p className="text-text-secondary max-w-sm mt-3 leading-relaxed">Drag & drop images or videos,<br/>or use the prompt bar to generate with AI.</p>
                     </div>
                 </div>
@@ -1094,7 +1094,7 @@ const App: React.FC = () => {
       {/* Center-top branding - Warm Ember */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto">
          <div className="bg-elevated/70 backdrop-blur-xl border border-border/50 px-4 py-2 rounded-full text-xs font-medium flex items-center gap-4 shadow-xl shadow-black/30">
-             <span className="font-display font-semibold text-primary">AI Canvas</span>
+             <span className="font-display font-semibold text-primary">GenCanvas</span>
              <span className="w-px h-3 bg-border"></span>
              <span className="flex items-center gap-1.5 text-text-secondary"><MousePointer2 size={12}/> Select</span>
              <span className="flex items-center gap-1.5 text-text-secondary"><span className="border border-border rounded px-1.5 py-0.5 text-[10px] bg-surface/50">Shift</span> + Drag to Pan</span>
