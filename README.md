@@ -4,7 +4,7 @@ An infinite canvas for AI-powered image, video, and audio generation. Bring your
 
 **Live Demo:** https://gencanvas.netlify.app
 
-![GenCanvas Screenshot](https://via.placeholder.com/800x450/0a0908/f59e0b?text=GenCanvas)
+![GenCanvas Screenshot](screenshot.png)
 
 ## Why GenCanvas?
 
