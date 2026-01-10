@@ -149,16 +149,17 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   // Floating Bar State
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const [promptAttachments, setPromptAttachments] = useState<Attachment[]>([]);
+  // Initialize from lastDraftState (retained from previous generation), or generationMetadata, or defaults
   const [draftState, setDraftState] = useState<Partial<PromptState>>(() => ({
-      prompt: '',
-      model: (layer.generationMetadata?.model as ModelId) || DEFAULT_MODEL,
-      aspectRatio: layer.generationMetadata?.aspectRatio || 'Auto',
-      creativity: layer.generationMetadata?.creativity || 65,
-      imageSize: layer.generationMetadata?.imageSize || '1K',
-      videoResolution: (layer.generationMetadata?.resolution as any) || '720p',
-      videoDuration: layer.generationMetadata?.duration || '6',
-      videoMode: layer.generationMetadata?.videoMode || 'standard',
-      voice: layer.generationMetadata?.voice || 'Kore'
+      prompt: layer.lastDraftState?.prompt || '',
+      model: (layer.lastDraftState?.model as ModelId) || (layer.generationMetadata?.model as ModelId) || DEFAULT_MODEL,
+      aspectRatio: layer.lastDraftState?.aspectRatio || layer.generationMetadata?.aspectRatio || 'Auto',
+      creativity: layer.lastDraftState?.creativity ?? layer.generationMetadata?.creativity ?? 65,
+      imageSize: layer.lastDraftState?.imageSize || layer.generationMetadata?.imageSize || '2K',
+      videoResolution: layer.lastDraftState?.videoResolution || (layer.generationMetadata?.resolution as any) || '720p',
+      videoDuration: layer.lastDraftState?.videoDuration || layer.generationMetadata?.duration || '6',
+      videoMode: layer.lastDraftState?.videoMode || layer.generationMetadata?.videoMode || 'standard',
+      voice: layer.lastDraftState?.voice || layer.generationMetadata?.voice || 'Kore'
   }));
 
   // Resolved base64 for API calls (fetched from asset store if available)

@@ -474,10 +474,24 @@ const App: React.FC = () => {
         });
     }
 
+    // Store the draft state on the source layer for retention
+    const lastDraftState = {
+        prompt,
+        model,
+        aspectRatio: finalAspectRatio,
+        creativity,
+        imageSize,
+        videoResolution: resolution,
+        videoDuration: duration,
+        videoMode,
+        voice
+    };
+
     if (isPlaceholder) {
         setLayers(prev => [...prev.filter(l => l.id !== originalLayerId), ...placeholders]);
     } else {
-        setLayers(prev => [...prev, ...placeholders]);
+        // Update source layer with lastDraftState and add new placeholders
+        setLayers(prev => prev.map(l => l.id === originalLayerId ? { ...l, lastDraftState } : l).concat(placeholders));
     }
     setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 

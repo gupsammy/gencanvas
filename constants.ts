@@ -17,7 +17,7 @@ export const AVAILABLE_VOICES = [
   { id: 'Zephyr', name: 'Zephyr (F)', gender: 'Female' },
 ];
 
-export const DEFAULT_MODEL = ModelId.GEMINI_2_5_FLASH_IMAGE;
+export const DEFAULT_MODEL = ModelId.GEMINI_3_PRO_IMAGE;
 
 // Warm Ember harmonized color palettes
 export const STICKY_COLORS = [

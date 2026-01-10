@@ -100,10 +100,10 @@ const PromptBar: React.FC<PromptBarProps> = ({
   // Settings
   const [aspectRatio, setAspectRatio] = useState(initialValues?.aspectRatio || savedSettings?.aspectRatio || "Auto");
   const [creativity, setCreativity] = useState(initialValues?.creativity || savedSettings?.creativity || 65);
-  const [imageSize, setImageSize] = useState(initialValues?.imageSize || savedSettings?.imageSize || "1K");
+  const [imageSize, setImageSize] = useState(initialValues?.imageSize || savedSettings?.imageSize || "2K");
   const [videoResolution, setVideoResolution] = useState<'720p' | '1080p'>(initialValues?.videoResolution || savedSettings?.videoResolution || "720p");
   const [videoDuration, setVideoDuration] = useState(initialValues?.videoDuration || savedSettings?.videoDuration || "8");
-  const [imageCount, setImageCount] = useState(initialValues?.imageCount || savedSettings?.imageCount || 1);
+  const [imageCount, setImageCount] = useState(initialValues?.imageCount || savedSettings?.imageCount || 4);
   const [selectedVoice, setSelectedVoice] = useState(initialValues?.voice || savedSettings?.selectedVoice || 'Kore');
 
   // Video Mode State

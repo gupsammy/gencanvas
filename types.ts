@@ -42,6 +42,19 @@ export interface GenerationMetadata {
     voice?: string;
 }
 
+// Stores the last prompt/settings entered in the floating PromptBar for this layer
+export interface LastDraftState {
+    prompt: string;
+    model?: string;
+    aspectRatio?: string;
+    creativity?: number;
+    imageSize?: string;
+    videoResolution?: '720p' | '1080p';
+    videoDuration?: string;
+    videoMode?: VideoMode;
+    voice?: string;
+}
+
 export interface PromptState {
     prompt: string;
     model: ModelId;
@@ -105,6 +118,7 @@ export interface LayerData {
   referenceImages?: string[]; // Store base64 of refs used for generation
   videoMetadata?: any; // Store Veo video object/handle for extension
   generationMetadata?: GenerationMetadata;
+  lastDraftState?: LastDraftState; // Last prompt/settings used in floating PromptBar
   title: string;
   createdAt: number;
   flipX?: boolean;
