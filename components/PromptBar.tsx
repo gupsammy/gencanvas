@@ -352,16 +352,14 @@ const PromptBar: React.FC<PromptBarProps> = ({
       return placeholder;
   };
 
-  const isGlobal = variant === 'global';
-
   return (
     <div className="relative">
       {/* Warm glow effect behind - only for global variant */}
-      {isGlobal && (
+      {isGlobalVariant && (
         <div className="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 rounded-3xl blur-xl opacity-50 pointer-events-none" />
       )}
 
-      <div className={`relative ${isGlobal
+      <div className={`relative ${isGlobalVariant
         ? "bg-elevated/80 backdrop-blur-2xl border border-border/50 p-4 rounded-2xl shadow-2xl shadow-black/30 w-full max-w-2xl mx-auto"
         : "bg-elevated/90 backdrop-blur-xl border border-border/50 p-3 rounded-xl shadow-xl shadow-black/30 w-[600px]"
       }`}>
@@ -369,7 +367,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
       {showSettings && !isExtension && (
         <div className={`
             absolute left-0 right-0 p-4 bg-elevated/95 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl shadow-black/30 z-20
-            ${isGlobal ? 'bottom-full mb-3' : 'top-full mt-3'}
+            ${isGlobalVariant ? 'bottom-full mb-3' : 'top-full mt-3'}
             animate-scale-in
         `}>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -594,7 +592,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             const label = getLabelForAttachment(idx);
             return (
                 <div key={att.id} className="relative group shrink-0">
-                <div className={`rounded-lg border border-border overflow-hidden relative ${isGlobal ? 'w-16 h-16' : 'w-10 h-10'}`}>
+                <div className={`rounded-lg border border-border overflow-hidden relative ${isGlobalVariant ? 'w-16 h-16' : 'w-10 h-10'}`}>
                     <img src={att.previewUrl} alt="Preview" className="w-full h-full object-cover" />
                     {label && (
                         <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[7px] text-center text-white font-bold py-0.5 truncate px-1">
@@ -629,13 +627,13 @@ const PromptBar: React.FC<PromptBarProps> = ({
                     {mediaType === 'image' && <ImageIcon size={20} />}
                     {mediaType === 'video' && <Video size={20} />}
                     {mediaType === 'audio' && <Mic size={20} />}
-                    {isGlobal && <ChevronDown size={14} className="opacity-50" />}
+                    {isGlobalVariant && <ChevronDown size={14} className="opacity-50" />}
                  </button>
 
                  {showModeMenu && (
                      <div className={`
                         absolute left-0 border border-border bg-surface rounded-xl shadow-xl overflow-hidden min-w-[140px] z-30
-                        ${isGlobal ? 'bottom-full mb-2' : 'top-full mt-2'}
+                        ${isGlobalVariant ? 'bottom-full mb-2' : 'top-full mt-2'}
                      `}>
                         <button 
                             onClick={() => { setMediaType('image'); setShowModeMenu(false); }}
@@ -675,7 +673,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
                  {showAttachMenu && (
                      <div className={`
                         absolute left-0 border border-border bg-surface rounded-xl shadow-xl overflow-hidden min-w-[180px] z-30
-                        ${isGlobal ? 'bottom-full mb-2' : 'top-full mt-2'}
+                        ${isGlobalVariant ? 'bottom-full mb-2' : 'top-full mt-2'}
                      `}>
                         <button 
                             onClick={() => fileInputRef.current?.click()}
