@@ -19,8 +19,6 @@ export const AVAILABLE_VOICES = [
 
 export const DEFAULT_MODEL = ModelId.GEMINI_2_5_FLASH_IMAGE;
 
-export const INITIAL_CANVAS_OFFSET = { x: 0, y: 0 };
-
 // Warm Ember harmonized color palettes
 export const STICKY_COLORS = [
   '#fef3c7', // warm cream
