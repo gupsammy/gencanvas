@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { LayerData } from '../types';
-import { Layers, Info, ChevronRight, ChevronLeft, Image as ImageIcon, Edit2, Video as VideoIcon, Sliders, Cpu, Loader2, AlertCircle, StickyNote, BoxSelect, Pencil, Type as TypeIcon, Folder, FolderOpen, CornerDownRight, Mic, Trash2, Download, Copy, ChevronDown } from 'lucide-react';
+import { Layers, Info, ChevronRight, ChevronLeft, Image as ImageIcon, Edit2, Video as VideoIcon, Sliders, Cpu, Loader2, AlertCircle, StickyNote, BoxSelect, Pencil, Type as TypeIcon, Folder, FolderOpen, CornerDownRight, Mic, Trash2, Download, Copy, ChevronDown, Check } from 'lucide-react';
 
 type ExportFormat = 'png' | 'jpg' | 'mp4' | 'wav';
 
@@ -24,6 +24,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [hoveredLayerId, setHoveredLayerId] = useState<string | null>(null);
   const [exportMenuLayerId, setExportMenuLayerId] = useState<string | null>(null);
+  const [promptCopied, setPromptCopied] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Close export menu when clicking outside
@@ -63,6 +64,16 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
   const handleNameKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       (e.target as HTMLInputElement).blur();
+    }
+  };
+
+  const handleCopyPrompt = async (prompt: string) => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy prompt:', err);
     }
   };
 
@@ -116,12 +127,12 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                     relative flex items-center gap-2.5 p-2 rounded-lg cursor-pointer transition-all duration-200 group/item select-none
                     ${isSelected
                       ? 'bg-primary/15 ring-1 ring-primary/40'
-                      : 'hover:bg-white/[0.04]'}
+                      : 'hover:bg-white/5'}
                 `}
                 style={{ marginLeft: `${depth * 14}px` }}
             >
                 {isGroup && (
-                    <button onClick={(e) => toggleGroup(layer.id, e)} className="p-1 hover:bg-white/10 rounded-md text-stone-500 hover:text-stone-300 transition-colors">
+                    <button onClick={(e) => toggleGroup(layer.id, e)} className="p-1 hover:bg-white/5 rounded-md text-stone-500 hover:text-stone-300 transition-all active:scale-[0.95]">
                         {isExpanded ? <FolderOpen size={14} /> : <Folder size={14} />}
                     </button>
                 )}
@@ -174,19 +185,19 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                             <div className="relative" ref={exportMenuLayerId === layer.id ? exportMenuRef : undefined}>
                                 <button
                                     onClick={() => setExportMenuLayerId(exportMenuLayerId === layer.id ? null : layer.id)}
-                                    className="p-1.5 rounded-md text-stone-500 hover:text-primary hover:bg-primary/10 transition-all flex items-center gap-0.5"
+                                    className="p-1.5 rounded-md text-stone-500 hover:text-primary hover:bg-primary/10 transition-all active:scale-[0.95] flex items-center gap-0.5"
                                     title="Export"
                                 >
                                     <Download size={13} />
                                     <ChevronDown size={10} />
                                 </button>
                                 {exportMenuLayerId === layer.id && (
-                                    <div className="absolute right-0 top-full mt-1 bg-elevated border border-border rounded-lg shadow-xl z-50 py-1 min-w-[80px]">
+                                    <div className="absolute right-0 top-full mt-1 bg-elevated border border-border rounded-xl shadow-2xl shadow-black/50 z-50 py-1.5 min-w-[80px]">
                                         {getExportFormats(layer).map(fmt => (
                                             <button
                                                 key={fmt}
                                                 onClick={() => { onExportLayer(layer.id, fmt); setExportMenuLayerId(null); }}
-                                                className="w-full px-3 py-1.5 text-left text-xs text-stone-300 hover:bg-primary/10 hover:text-primary transition-colors uppercase"
+                                                className="w-full px-3 py-2 text-left text-xs text-stone-300 hover:bg-white/5 hover:text-white transition-colors uppercase"
                                             >
                                                 {fmt}
                                             </button>
@@ -198,7 +209,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                         {onDeleteLayer && (
                             <button
                                 onClick={() => onDeleteLayer(layer.id)}
-                                className="p-1.5 rounded-md text-stone-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                                className="p-1.5 rounded-md text-stone-500 hover:text-red-400 hover:bg-red-500/10 transition-all active:scale-[0.95]"
                                 title="Delete"
                             >
                                 <Trash2 size={13} />
@@ -294,7 +305,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                                                 <button
                                                     key={fmt}
                                                     onClick={() => onExportLayer(selectedLayer.id, fmt)}
-                                                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary text-xs font-medium transition-all uppercase"
+                                                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-primary/10 hover:bg-primary/20 active:scale-[0.97] text-primary text-xs font-medium transition-all uppercase"
                                                 >
                                                     <Download size={12} />
                                                     {fmt}
@@ -309,7 +320,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                                     {canDuplicate(selectedLayer) && onDuplicateLayer && (
                                         <button
                                             onClick={() => onDuplicateLayer(selectedLayer.id)}
-                                            className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-stone-300 text-xs font-medium transition-all"
+                                            className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 active:scale-[0.97] text-stone-300 text-xs font-medium transition-all"
                                         >
                                             <Copy size={14} />
                                             Duplicate
@@ -318,7 +329,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                                     {onDeleteLayer && (
                                         <button
                                             onClick={() => onDeleteLayer(selectedLayer.id)}
-                                            className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-medium transition-all"
+                                            className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 active:scale-[0.97] text-red-400 text-xs font-medium transition-all"
                                         >
                                             <Trash2 size={14} />
                                             Delete
@@ -395,7 +406,20 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                             {/* Prompt */}
                             {selectedLayer.promptUsed && (
                                 <div className="space-y-2.5">
-                                    <div className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider">Prompt</div>
+                                    <div className="flex items-center justify-between">
+                                        <div className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider">Prompt</div>
+                                        <button
+                                            onClick={() => handleCopyPrompt(selectedLayer.promptUsed!)}
+                                            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all ${
+                                                promptCopied
+                                                    ? 'bg-emerald-500/20 text-emerald-400'
+                                                    : 'bg-white/[0.04] hover:bg-white/[0.08] text-stone-400 hover:text-stone-200'
+                                            }`}
+                                        >
+                                            {promptCopied ? <Check size={10} /> : <Copy size={10} />}
+                                            {promptCopied ? 'Copied' : 'Copy'}
+                                        </button>
+                                    </div>
                                     <div className="bg-gradient-to-br from-primary/5 to-transparent p-3 rounded-lg border border-primary/10 text-xs text-stone-300 leading-relaxed">
                                         <span className="text-primary/60">"</span>
                                         {selectedLayer.promptUsed}

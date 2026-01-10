@@ -622,7 +622,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <div className="relative shrink-0" ref={modeMenuRef}>
                  <button
                     onClick={() => setShowModeMenu(!showModeMenu)}
-                    className="flex items-center gap-2 p-2.5 bg-surface/50 hover:bg-surface border border-border hover:border-white/20 rounded-xl transition-all text-gray-300 hover:text-white"
+                    className="flex items-center gap-2 p-2.5 bg-surface/50 hover:bg-surface border border-border hover:border-white/20 rounded-xl transition-all active:scale-[0.98] text-gray-300 hover:text-white"
                     title="Select Mode"
                     disabled={isGenerating}
                  >
@@ -665,7 +665,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <div className="relative shrink-0" ref={attachMenuRef}>
                  <button
                     onClick={() => setShowAttachMenu(!showAttachMenu)}
-                    className="p-2.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
+                    className="p-2.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all active:scale-[0.98]"
                     title="Attach Media"
                     disabled={isGenerating}
                  >
@@ -711,7 +711,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             onKeyDown={handleKeyDown}
             onWheel={(e) => e.stopPropagation()}
             placeholder={getPlaceholder()}
-            className="w-full bg-transparent text-white placeholder-gray-500 resize-none py-2.5 focus:outline-none text-sm custom-scrollbar"
+            className="w-full bg-transparent text-white placeholder-stone-500 resize-none py-2.5 focus:outline-none text-sm custom-scrollbar"
             rows={1}
             style={{ minHeight: '44px', maxHeight: '300px' }}
             disabled={isGenerating}
@@ -723,7 +723,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
             {!isExtension && (
                 <button
                     onClick={() => setShowSettings(!showSettings)}
-                    className={`p-2.5 rounded-xl transition-colors ${showSettings ? 'text-primary bg-primary/10' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                    className={`p-2.5 rounded-xl transition-all active:scale-[0.98] ${showSettings ? 'text-primary bg-primary/10' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
                     title="Settings"
                 >
                     <Settings2 size={20} />
@@ -735,7 +735,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
                 className={`p-3 rounded-xl flex items-center justify-center transition-all duration-200 ${
                 isGenerating
                     ? 'bg-primary/50 cursor-not-allowed'
-                    : 'bg-primary hover:bg-primary-hover hover:scale-105 text-white shadow-lg shadow-primary/30'
+                    : 'bg-primary hover:bg-primary-hover hover:scale-105 active:scale-[0.97] text-white shadow-lg shadow-primary/30'
                 }`}
             >
                 {isGenerating ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}

@@ -149,7 +149,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const [promptAttachments, setPromptAttachments] = useState<Attachment[]>([]);
   const [draftState, setDraftState] = useState<Partial<PromptState>>(() => ({
-      prompt: layer.promptUsed || '',
+      prompt: '',
       model: (layer.generationMetadata?.model as ModelId) || DEFAULT_MODEL,
       aspectRatio: layer.generationMetadata?.aspectRatio || 'Auto',
       creativity: layer.generationMetadata?.creativity || 65,
@@ -936,25 +936,25 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
 
       {isSelected && !isResizingMode && !isResizingLayer && (
           <div className="absolute -top-12 left-0 z-[60] layer-controls origin-bottom-left" style={{ transform: `scale(${1/scale})` }}>
-              <div className="flex items-center gap-1 bg-surface/95 backdrop-blur-xl border border-border rounded-lg p-1 shadow-2xl">
+              <div className="flex items-center gap-1 bg-surface/95 backdrop-blur-xl border border-border rounded-xl p-1.5 shadow-2xl shadow-black/40">
                   <div className="p-1.5 text-gray-400 cursor-grab active:cursor-grabbing border-r border-white/10 pr-2 mr-1"><Move size={16} /></div>
                   
                   {/* General Controls */}
-                  <button onClick={() => onFlip(layer.id, 'x')} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Flip Horizontal"><FlipHorizontal size={16} /></button>
-                  <button onClick={() => onFlip(layer.id, 'y')} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Flip Vertical"><FlipVertical size={16} /></button>
-                  {layer.type === 'image' && <button onClick={() => onRemoveBackground(layer.id)} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Remove Background"><Eraser size={16} /></button>}
-                  {layer.type === 'image' && <button onClick={enterResizeMode} className="p-1.5 hover:bg-white/10 rounded-md text-gray-300 transition-colors" title="Outpaint / Expand"><Maximize size={16} /></button>}
+                  <button onClick={() => onFlip(layer.id, 'x')} className="p-1.5 hover:bg-white/5 rounded-md text-gray-300 transition-all active:scale-[0.95]" title="Flip Horizontal"><FlipHorizontal size={16} /></button>
+                  <button onClick={() => onFlip(layer.id, 'y')} className="p-1.5 hover:bg-white/5 rounded-md text-gray-300 transition-all active:scale-[0.95]" title="Flip Vertical"><FlipVertical size={16} /></button>
+                  {layer.type === 'image' && <button onClick={() => onRemoveBackground(layer.id)} className="p-1.5 hover:bg-white/5 rounded-md text-gray-300 transition-all active:scale-[0.95]" title="Remove Background"><Eraser size={16} /></button>}
+                  {layer.type === 'image' && <button onClick={enterResizeMode} className="p-1.5 hover:bg-white/5 rounded-md text-gray-300 transition-all active:scale-[0.95]" title="Outpaint / Expand"><Maximize size={16} /></button>}
 
                   <div className="w-px h-4 bg-white/10 mx-1"></div>
 
                   {/* Annotation Tools */}
-                  <button onClick={() => setTool(tool === 'pencil' ? 'cursor' : 'pencil')} className={`p-1.5 rounded-md transition-colors ${tool === 'pencil' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Draw"><Pencil size={16} /></button>
-                  <button onClick={() => setTool(tool === 'text' ? 'cursor' : 'text')} className={`p-1.5 rounded-md transition-colors ${tool === 'text' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Add Text Overlay"><TypeIcon size={16} /></button>
-                  <button onClick={() => setTool(tool === 'rectangle' ? 'cursor' : 'rectangle')} className={`p-1.5 rounded-md transition-colors ${tool === 'rectangle' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/10'}`} title="Draw Rectangle"><Square size={16} /></button>
+                  <button onClick={() => setTool(tool === 'pencil' ? 'cursor' : 'pencil')} className={`p-1.5 rounded-md transition-all active:scale-[0.95] ${tool === 'pencil' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/5'}`} title="Draw"><Pencil size={16} /></button>
+                  <button onClick={() => setTool(tool === 'text' ? 'cursor' : 'text')} className={`p-1.5 rounded-md transition-all active:scale-[0.95] ${tool === 'text' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/5'}`} title="Add Text Overlay"><TypeIcon size={16} /></button>
+                  <button onClick={() => setTool(tool === 'rectangle' ? 'cursor' : 'rectangle')} className={`p-1.5 rounded-md transition-all active:scale-[0.95] ${tool === 'rectangle' ? 'bg-primary text-white' : 'text-gray-300 hover:bg-white/5'}`} title="Draw Rectangle"><Square size={16} /></button>
 
                   {(tool === 'pencil' || tool === 'rectangle') && (
                     <div className="relative flex items-center gap-1 border-r border-white/10 pr-2 mr-1">
-                        <button onClick={() => setShowStrokePicker(!showStrokePicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/10 flex items-center gap-1 text-[10px] font-mono">
+                        <button onClick={() => setShowStrokePicker(!showStrokePicker)} className="p-1.5 rounded-md text-gray-300 hover:bg-white/5 transition-all flex items-center gap-1 text-[10px] font-mono">
                             <div className="w-0.5 rounded-full bg-gray-300" style={{ height: `${Math.min(strokeWidth * 2, 16)}px` }}></div>
                             <span>{strokeWidth}px</span>
                         </button>
@@ -1085,9 +1085,9 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
 
                   <div className="w-px h-4 bg-white/10 mx-1"></div>
                   <div className="relative">
-                      <button onClick={() => { setShowMenu(!showMenu); setShowExportMenu(false); setShowArrangeMenu(false); }} className={`p-1.5 rounded-md text-gray-300 transition-colors ${showMenu ? 'bg-white/10 text-white' : 'hover:bg-white/10'}`}><MoreHorizontal size={16} /></button>
+                      <button onClick={() => { setShowMenu(!showMenu); setShowExportMenu(false); setShowArrangeMenu(false); }} className={`p-1.5 rounded-md text-gray-300 transition-all active:scale-[0.95] ${showMenu ? 'bg-white/10 text-white' : 'hover:bg-white/5'}`}><MoreHorizontal size={16} /></button>
                       {showMenu && (
-                          <div className="absolute top-full left-0 mt-2 w-48 bg-surface border border-border rounded-lg shadow-xl overflow-hidden py-1 flex flex-col gap-0.5 z-50">
+                          <div className="absolute top-full left-0 mt-2 w-48 bg-elevated border border-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden py-1.5 flex flex-col gap-0.5 z-50">
                                 <button onClick={handleRenameClick} className="flex items-center gap-3 px-3 py-2 text-xs text-left w-full text-gray-300 hover:bg-white/5"><Edit3 size={14}/> Rename</button>
                                 <button onClick={handleDuplicateClick} className="flex items-center gap-3 px-3 py-2 text-xs text-left w-full text-gray-300 hover:bg-white/5"><Copy size={14}/> Make a Copy</button>
                                 {layer.type === 'image' && <button onClick={() => { onAddReference(layer.id); setShowMenu(false); }} className="flex items-center gap-3 px-3 py-2 text-xs text-left w-full text-gray-300 hover:bg-white/5"><PlusCircle size={14}/> Add as Reference</button>}
@@ -1115,7 +1115,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                                         )}
                                     </div>
                                 )}
-                                <button onClick={() => onDelete(layer.id)} className="flex items-center gap-3 px-3 py-2 text-xs text-left w-full text-red-400 hover:text-red-300 hover:bg-white/5 border-t border-white/5"><Trash2 size={14}/> Delete</button>
+                                <button onClick={() => onDelete(layer.id)} className="flex items-center gap-3 px-3 py-2 text-xs text-left w-full text-red-400 hover:text-red-300 hover:bg-red-500/10 border-t border-white/5"><Trash2 size={14}/> Delete</button>
                           </div>
                       )}
                   </div>
@@ -1350,10 +1350,6 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                     rows={1}
                 />
             </div>
-        )}
-        
-        {layer.promptUsed && isSelected && !isResizingMode && !isResizingLayer && (layer.type === 'image' || layer.type === 'video' || layer.type === 'audio') && (
-            <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-2 text-[10px] text-gray-300 truncate z-10">{layer.promptUsed}</div>
         )}
       </div>
 
