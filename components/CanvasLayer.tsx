@@ -6,7 +6,7 @@ import { getAssetBase64 } from '../services/assetStore';
 import PromptBar from './PromptBar';
 import {
     Move, Trash2, MoreHorizontal, Copy, FlipHorizontal,
-    FlipVertical, Download, Crop, ChevronRight, X,
+    FlipVertical, Download, ChevronRight, X,
     Edit3, PlusCircle, Eraser, Play, Volume2, VolumeX, Loader2, AlertCircle,
     Pencil, Type as TypeIcon, Palette, RotateCcw, BoxSelect, StickyNote,
     BringToFront, SendToBack, ArrowUp, ArrowDown, Mic, Pause, Minus, Plus,
@@ -26,13 +26,14 @@ interface CanvasLayerProps {
   onUpdateFontSize?: (id: string, delta: number) => void;
   onDragEnd: (id: string) => void;
   onGenerate: (
-    prompt: string, 
-    attachments: Attachment[], 
-    model: ModelId, 
-    aspectRatio: string, 
-    creativity: number, 
-    imageSize: string, 
-    resolution: '720p' | '1080p', 
+    layerId: string,
+    prompt: string,
+    attachments: Attachment[],
+    model: ModelId,
+    aspectRatio: string,
+    creativity: number,
+    imageSize: string,
+    resolution: '720p' | '1080p',
     mediaType: MediaType,
     duration: string,
     videoMode: VideoMode,
@@ -50,7 +51,7 @@ interface CanvasLayerProps {
   onReorder: (id: string, action: 'front' | 'back' | 'forward' | 'backward') => void;
   isGenerating: boolean;
   generationTask?: GenerationTask;
-  onCancelGeneration?: () => void;
+  onCancelGeneration?: (id: string) => void;
   onSelectOnCanvasStart?: () => void;
   injectedAttachment?: Attachment | null;
   onInjectedAttachmentConsumed?: () => void;
@@ -688,7 +689,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
                  const comp = await compositeLayerImage();
                  if (comp) finalA = [...finalA, { id: 'comp-'+layer.id, file: new File([],"c.png"), previewUrl: comp, mimeType: 'image/png', base64: comp }];
             }
-            onGenerate(p, finalA, m, ar, c, s, res, mt, d, vm, si, count, voice);
+            onGenerate(layer.id, p, finalA, m, ar, c, s, res, mt, d, vm, si, count, voice);
         }
   };
 
@@ -813,7 +814,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       // We should update layer x,y,w,h to match resizeBounds absolute position.
       onUpdateTransform(layer.id, layer.x + resizeBounds.x, layer.y + resizeBounds.y, resizeBounds.width, resizeBounds.height);
       
-      onGenerate(p || "Extend the image", [attachment], ModelId.GEMINI_2_5_FLASH_IMAGE, closest.s, 65, "1K", '720p', 'image', "6", 'standard', -1); 
+      onGenerate(layer.id, p || "Extend the image", [attachment], ModelId.GEMINI_2_5_FLASH_IMAGE, closest.s, 65, "1K", '720p', 'image', "6", 'standard', -1); 
       setIsResizingMode(false);
   };
   
@@ -857,7 +858,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
             {/* Cancel button */}
             {onCancelGeneration && (
                 <button
-                    onClick={(e) => { e.stopPropagation(); onCancelGeneration(); }}
+                    onClick={(e) => { e.stopPropagation(); onCancelGeneration(layer.id); }}
                     className="mt-4 flex items-center gap-1.5 px-3 py-1.5 bg-surface hover:bg-border/50 border border-border/50 rounded-lg text-xs text-text-secondary hover:text-text-primary transition-all duration-200"
                 >
                     <X size={12} />
