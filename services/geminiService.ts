@@ -4,12 +4,18 @@ import { ModelId, GenerateOptions, GenerationMetadata } from '../types';
 import { getStoredApiKey } from './apiKeyService';
 
 // Helper to get fresh client - uses stored API key or falls back to env var
+// Timeout increased to 3 minutes for image generation with reference images
 const getAiClient = () => {
   const apiKey = getStoredApiKey() || process.env.API_KEY;
   if (!apiKey) {
     throw new Error('No API key configured. Please add your Gemini API key.');
   }
-  return new GoogleGenAI({ apiKey });
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      timeout: 180000 // 3 minutes - image generation can take longer with reference images
+    }
+  });
 };
 
 // Export getter for API key (used in video download)
@@ -38,6 +44,40 @@ const checkAbort = (signal?: AbortSignal) => {
     if (signal?.aborted) {
         throw new DOMException('Generation cancelled', 'AbortError');
     }
+};
+
+// Helper for retrying transient API errors (503, 429, etc.)
+const withRetry = async <T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    signal?: AbortSignal
+): Promise<T> => {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        checkAbort(signal);
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+            // Check if it's a retryable error (503, 429, or network issues)
+            const isRetryable =
+                error?.message?.includes('503') ||
+                error?.message?.includes('UNAVAILABLE') ||
+                error?.message?.includes('Deadline expired') ||
+                error?.message?.includes('429') ||
+                error?.message?.includes('RESOURCE_EXHAUSTED');
+
+            if (!isRetryable || attempt >= maxRetries - 1) {
+                throw error;
+            }
+
+            // Exponential backoff: 2s, 4s, 8s
+            const delay = Math.pow(2, attempt + 1) * 1000;
+            console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+    throw lastError;
 };
 
 // WAV Header Helper
@@ -124,19 +164,24 @@ export const generateSpeechContent = async (options: GenerateOptions, callbacks?
 
     try {
         checkAbort(signal);
-        const response = await ai.models.generateContent({
-            model: ModelId.GEMINI_2_5_FLASH_TTS,
-            contents: { parts: [{ text: prompt }] },
-            config: {
-                temperature: temperature, // Pass temperature here
-                responseModalities: [Modality.AUDIO],
-                speechConfig: {
-                    voiceConfig: {
-                        prebuiltVoiceConfig: { voiceName: voice },
+        // Wrap API call with retry logic for transient errors
+        const response = await withRetry(
+            () => ai.models.generateContent({
+                model: ModelId.GEMINI_2_5_FLASH_TTS,
+                contents: { parts: [{ text: prompt }] },
+                config: {
+                    temperature: temperature,
+                    responseModalities: [Modality.AUDIO],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: voice },
+                        },
                     },
                 },
-            },
-        });
+            }),
+            3,
+            signal
+        );
 
         checkAbort(signal);
         onProgress?.(80); // Processing response
@@ -231,13 +276,18 @@ export const generateImageContent = async (options: GenerateOptions, callbacks?:
     checkAbort(signal);
     onProgress?.(30);
 
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: {
-        parts: parts,
-      },
-      config: config
-    });
+    // Wrap API call with retry logic for transient 503/429 errors
+    const response = await withRetry(
+      () => ai.models.generateContent({
+        model: model,
+        contents: {
+          parts: parts,
+        },
+        config: config
+      }),
+      3, // max retries
+      signal
+    );
 
     checkAbort(signal);
     onProgress?.(90);
