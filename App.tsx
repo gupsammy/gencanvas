@@ -14,6 +14,11 @@ import ApiKeyModal from './components/ApiKeyModal';
 import { Image as ImageIcon, ZoomIn, ZoomOut, MousePointer2, Undo2, Redo2, StickyNote, BoxSelect, Pencil, Type as TypeIcon, Trash2, Key } from 'lucide-react';
 import { STICKY_COLORS, GROUP_COLORS } from './constants';
 
+// Memoized components to prevent unnecessary re-renders
+const MemoizedPromptBar = React.memo(PromptBar);
+const MemoizedSidebar = React.memo(Sidebar);
+const MemoizedMinimap = React.memo(Minimap);
+
 // A simple 1x1 transparent pixel for placeholders
 const PLACEHOLDER_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
@@ -60,6 +65,17 @@ const App: React.FC = () => {
   const fileDropRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Refs for stable callbacks (avoid recreating handlers on every render)
+  const layersRef = useRef<LayerData[]>(layers);
+  const isSelectionModeRef = useRef(isSelectionMode);
+
+  // Keep refs in sync
+  useEffect(() => { layersRef.current = layers; }, [layers]);
+  useEffect(() => { isSelectionModeRef.current = isSelectionMode; }, [isSelectionMode]);
+
+  // Memoized layer map for O(1) lookups
+  const layerMap = useMemo(() => new Map(layers.map(l => [l.id, l])), [layers]);
+
   // Cancel a generation task (also handles disconnected/orphaned generations)
   const cancelGeneration = useCallback((layerId: string) => {
     const task = generationTasks.get(layerId);
@@ -86,11 +102,6 @@ const App: React.FC = () => {
       return next;
     });
   }, []);
-
-  // Get task for a layer
-  const getTaskForLayer = useCallback((layerId: string) => {
-    return generationTasks.get(layerId);
-  }, [generationTasks]);
 
   const addToHistory = useCallback((newLayers: LayerData[]) => {
       setHistory(prev => {
@@ -630,15 +641,23 @@ const App: React.FC = () => {
     setSelectedLayerId(newLayer.id);
   };
 
+  // Use ref for scale to avoid recreating this callback
+  const scaleRef = useRef(scale);
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+
   const updateLayerPosition = useCallback((id: string, x: number, y: number) => {
+    // Use refs for stable callback - avoids recreating on every layers/scale change
+    const currentLayers = layersRef.current;
+    const currentScale = scaleRef.current;
+
     // Snapping Logic
-    const SNAP_THRESHOLD = 5 / scale;
+    const SNAP_THRESHOLD = 5 / currentScale;
     let snappedX = x;
     let snappedY = y;
     let verticalSnap: number | undefined;
     let horizontalSnap: number | undefined;
 
-    const movingLayer = layers.find(l => l.id === id);
+    const movingLayer = currentLayers.find(l => l.id === id);
 
     if (movingLayer) {
         const movingLeft = x;
@@ -648,11 +667,15 @@ const App: React.FC = () => {
         const movingBottom = y + movingLayer.height;
         const movingCenterY = y + movingLayer.height / 2;
 
-        layers.forEach(other => {
-            if (other.id === id) return;
-            // Don't snap to children if moving parent
-            if (other.parentId === id) return;
-            // Don't snap to parent if moving child? (optional, usually ok)
+        // Only check nearby layers for snapping (performance optimization)
+        const PROXIMITY = 500;
+        for (const other of currentLayers) {
+            if (other.id === id) continue;
+            if (other.parentId === id) continue;
+
+            // Skip layers that are too far away
+            if (Math.abs(other.x - x) > PROXIMITY && Math.abs(other.x + other.width - x) > PROXIMITY) continue;
+            if (Math.abs(other.y - y) > PROXIMITY && Math.abs(other.y + other.height - y) > PROXIMITY) continue;
 
             const otherLeft = other.x;
             const otherRight = other.x + other.width;
@@ -674,7 +697,7 @@ const App: React.FC = () => {
             else if (Math.abs(movingBottom - otherTop) < SNAP_THRESHOLD) { snappedY = otherTop - movingLayer.height; horizontalSnap = otherTop; }
             else if (Math.abs(movingBottom - otherBottom) < SNAP_THRESHOLD) { snappedY = otherBottom - movingLayer.height; horizontalSnap = otherBottom; }
             else if (Math.abs(movingCenterY - otherCenterY) < SNAP_THRESHOLD) { snappedY = otherCenterY - movingLayer.height/2; horizontalSnap = otherCenterY; }
-        });
+        }
     }
 
     setSnapLines({ vertical: verticalSnap, horizontal: horizontalSnap });
@@ -682,6 +705,9 @@ const App: React.FC = () => {
     setLayers(prev => {
         const target = prev.find(l => l.id === id);
         if (!target) return prev;
+
+        // If position hasn't changed, don't create new objects (structural sharing)
+        if (target.x === snappedX && target.y === snappedY) return prev;
 
         const dx = snappedX - target.x;
         const dy = snappedY - target.y;
@@ -698,7 +724,7 @@ const App: React.FC = () => {
         }
         return prev.map(l => l.id === id ? { ...l, x: snappedX, y: snappedY } : l);
     });
-  }, [layers, scale]);
+  }, []); // Empty deps - uses refs for stability
   
   const updateLayerTransform = useCallback((id: string, x: number, y: number, width: number, height: number) => { setLayers(prev => prev.map(l => l.id === id ? { ...l, x, y, width, height } : l)); }, []);
   const updateLayerAnnotations = useCallback((id: string, annotations: Annotation[]) => { setLayers(prev => prev.map(l => l.id === id ? { ...l, annotations } : l)); }, []);
@@ -985,6 +1011,38 @@ const App: React.FC = () => {
   };
   const zoomIn = () => setScale(s => Math.min(s + 0.1, 5)); const zoomOut = () => setScale(s => Math.max(s - 0.1, 0.1));
 
+  // Stable handlers for CanvasLayer to prevent re-renders (use refs to avoid dependency changes)
+  const handleLayerSelect = useCallback((id: string) => {
+    if (isSelectionModeRef.current) {
+      const layer = layersRef.current.find(l => l.id === id);
+      if (layer) handleLayerSelectForAttachment(layer);
+    } else {
+      setSelectedLayerId(id);
+    }
+  }, [handleLayerSelectForAttachment]);
+
+  const handleLayerGenerateStable = useCallback((
+    layerId: string,
+    prompt: string,
+    attachments: Attachment[],
+    model: ModelId,
+    aspectRatio: string,
+    creativity: number,
+    imageSize: string,
+    resolution: '720p' | '1080p',
+    mediaType: MediaType,
+    duration: string,
+    videoMode: VideoMode,
+    startImageIndex?: number,
+    count?: number,
+    voice?: string
+  ) => {
+    handleLayerGenerate(layerId, prompt, attachments, model, aspectRatio, creativity, imageSize, resolution, mediaType, duration, videoMode, startImageIndex, count, voice);
+  }, [handleLayerGenerate]);
+
+  const startGlobalCanvasSelection = useCallback(() => startCanvasSelection('global'), [startCanvasSelection]);
+  const startLayerCanvasSelection = useCallback(() => startCanvasSelection('layer'), [startCanvasSelection]);
+
   // Viewport culling: only render layers that are visible or near the viewport
   const visibleLayers = useMemo(() => {
     // Use window dimensions for viewport size
@@ -1047,15 +1105,15 @@ const App: React.FC = () => {
                     layer={layer}
                     isSelected={selectedLayerId === layer.id}
                     scale={scale}
-                    onSelect={(id) => { if (isSelectionMode) handleLayerSelectForAttachment(layer); else setSelectedLayerId(id); }}
+                    onSelect={handleLayerSelect}
                     onUpdatePosition={updateLayerPosition}
                     onUpdateTransform={updateLayerTransform}
                     onUpdateAnnotations={updateLayerAnnotations}
                     onUpdateText={updateLayerText}
                     onUpdateColor={updateLayerColor}
                     onUpdateFontSize={updateLayerFontSize}
-                    onDragEnd={() => handleDragEnd(layer.id)}
-                    onGenerate={(p, a, m, ar, c, s, res, mt, d, im, si, count, voice) => handleLayerGenerate(layer.id, p, a, m, ar, c, s, res, mt, d, im, si, count, voice)}
+                    onDragEnd={handleDragEnd}
+                    onGenerate={handleLayerGenerateStable}
                     onDelete={deleteLayer}
                     onDuplicate={duplicateLayer}
                     onRename={renameLayer}
@@ -1065,9 +1123,9 @@ const App: React.FC = () => {
                     onExtendVideo={handleExtendVideo}
                     onReorder={reorderLayer}
                     isGenerating={hasActiveGenerations}
-                    generationTask={getTaskForLayer(layer.id)}
-                    onCancelGeneration={() => cancelGeneration(layer.id)}
-                    onSelectOnCanvasStart={() => startCanvasSelection('layer')}
+                    generationTask={generationTasks.get(layer.id)}
+                    onCancelGeneration={cancelGeneration}
+                    onSelectOnCanvasStart={startLayerCanvasSelection}
                     injectedAttachment={selectionOriginLayerId === layer.id ? injectedAttachment : null}
                     onInjectedAttachmentConsumed={clearInjectedAttachment}
                     isSelectionMode={isSelectionMode}
@@ -1087,7 +1145,7 @@ const App: React.FC = () => {
 
       {selectedLayerId === null && (
           <div className="absolute bottom-8 left-0 right-0 px-4 z-50 pointer-events-none transition-all duration-300" style={{ marginLeft: isSidebarOpen ? 320 : 0 }}>
-             <div className="pointer-events-auto"><PromptBar onSubmit={handleGlobalGenerate} isGenerating={hasActiveGenerations} variant="global" attachments={globalAttachments} onAttachmentsChange={setGlobalAttachments} onSelectOnCanvasStart={() => startCanvasSelection('global')} inputRef={promptInputRef} /></div>
+             <div className="pointer-events-auto"><MemoizedPromptBar onSubmit={handleGlobalGenerate} isGenerating={hasActiveGenerations} variant="global" attachments={globalAttachments} onAttachmentsChange={setGlobalAttachments} onSelectOnCanvasStart={startGlobalCanvasSelection} inputRef={promptInputRef} /></div>
           </div>
       )}
       
@@ -1122,7 +1180,7 @@ const App: React.FC = () => {
             <button onClick={zoomOut} className="p-2 rounded-lg text-text-secondary hover:bg-primary/10 hover:text-primary transition-all duration-200" title="Zoom Out"><ZoomOut size={18} /></button>
       </div>
 
-      <Minimap
+      <MemoizedMinimap
         layers={layers}
         selectedLayerId={selectedLayerId}
         canvasOffset={canvasOffset}
@@ -1130,7 +1188,7 @@ const App: React.FC = () => {
         onViewportChange={setCanvasOffset}
       />
 
-      <Sidebar isOpen={isSidebarOpen} onToggle={() => setIsSidebarOpen(!isSidebarOpen)} layers={layers} selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} onRenameLayer={renameLayer} onLayerDoubleClick={handleLayerFocus} onDeleteLayer={deleteLayer} onExportLayer={exportLayer} onDuplicateLayer={duplicateLayer} />
+      <MemoizedSidebar isOpen={isSidebarOpen} onToggle={() => setIsSidebarOpen(!isSidebarOpen)} layers={layers} selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} onRenameLayer={renameLayer} onLayerDoubleClick={handleLayerFocus} onDeleteLayer={deleteLayer} onExportLayer={exportLayer} onDuplicateLayer={duplicateLayer} />
 
       {/* API Key Modal */}
       <ApiKeyModal
