@@ -20,7 +20,9 @@ interface AssetRecord {
 let dbInstance: IDBDatabase | null = null;
 
 // Runtime cache of blob URLs to avoid recreating them
+// Using Map for insertion-order iteration (enables LRU eviction)
 const blobUrlCache = new Map<string, string>();
+const MAX_BLOB_CACHE_SIZE = 50;
 
 function initDB(): Promise<IDBDatabase> {
   if (dbInstance) return Promise.resolve(dbInstance);
@@ -112,6 +114,16 @@ export async function getAssetUrl(id: string): Promise<string | null> {
       if (!record) {
         resolve(null);
         return;
+      }
+
+      // LRU eviction: if cache is full, revoke and remove oldest entry
+      if (blobUrlCache.size >= MAX_BLOB_CACHE_SIZE) {
+        const oldestKey = blobUrlCache.keys().next().value;
+        if (oldestKey) {
+          const oldUrl = blobUrlCache.get(oldestKey);
+          if (oldUrl) URL.revokeObjectURL(oldUrl);
+          blobUrlCache.delete(oldestKey);
+        }
       }
 
       const url = URL.createObjectURL(record.blob);

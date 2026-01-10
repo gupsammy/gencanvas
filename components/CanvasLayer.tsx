@@ -397,8 +397,10 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       }
   };
   useEffect(() => {
+      // Early exit when no annotation interaction is active - prevents listener accumulation
+      if (!isDraggingAnnotation && !isResizingAnnotation && !isDraggingVertex) return;
+
       const handleGlobalMouseMove = (e: MouseEvent) => {
-          if (!isDraggingAnnotation && !isResizingAnnotation && !isDraggingVertex) return;
           if (!selectedAnnotationId) return;
           const deltaX = (e.clientX - annotationDragStartRef.current.x) / scale;
           const deltaY = (e.clientY - annotationDragStartRef.current.y) / scale;
@@ -445,11 +447,10 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           }
       };
       const handleGlobalMouseUp = () => {
-          if (isDraggingAnnotation || isResizingAnnotation || isDraggingVertex) {
-              setIsDraggingAnnotation(false); setIsResizingAnnotation(false); setIsDraggingVertex(false); setDraggingVertexIndex(null); onDragEnd(layer.id);
-          }
+          setIsDraggingAnnotation(false); setIsResizingAnnotation(false); setIsDraggingVertex(false); setDraggingVertexIndex(null); onDragEnd(layer.id);
       };
-      if (isDraggingAnnotation || isResizingAnnotation || isDraggingVertex) { window.addEventListener('mousemove', handleGlobalMouseMove); window.addEventListener('mouseup', handleGlobalMouseUp); }
+      window.addEventListener('mousemove', handleGlobalMouseMove);
+      window.addEventListener('mouseup', handleGlobalMouseUp);
       return () => { window.removeEventListener('mousemove', handleGlobalMouseMove); window.removeEventListener('mouseup', handleGlobalMouseUp); };
   }, [isDraggingAnnotation, isResizingAnnotation, isDraggingVertex, draggingVertexIndex, selectedAnnotationId, scale, layer.annotations, onUpdateAnnotations, onDragEnd, layer.id]);
 
@@ -479,7 +480,15 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       if (tool === 'pencil' && drawingPath.length > 0) {
           const rect = canvasRef.current?.getBoundingClientRect();
           if (!rect) return;
-          setDrawingPath(prev => [...prev, {x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale}]);
+          const newX = (e.clientX - rect.left) / scale;
+          const newY = (e.clientY - rect.top) / scale;
+          // Point decimation: only add if at least 3px away from last point (reduces memory usage)
+          const lastPoint = drawingPath[drawingPath.length - 1];
+          const dx = newX - lastPoint.x;
+          const dy = newY - lastPoint.y;
+          if (dx * dx + dy * dy >= 9) { // 3px threshold squared
+              setDrawingPath(prev => [...prev, {x: newX, y: newY}]);
+          }
       } else if (tool === 'rectangle' && drawingRect && drawingRect.startX !== undefined) {
           const rect = canvasRef.current?.getBoundingClientRect();
           if (!rect) return;
@@ -556,8 +565,11 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   };
 
   useEffect(() => {
+      // Early exit when no resize is active - prevents listener accumulation
+      if (!isResizingLayer && !isResizingCrop) return;
+
       const handleGlobalMouseMove = (e: MouseEvent) => {
-          if ((!isResizingLayer && !isResizingCrop) || !resizeStartRef.current) return;
+          if (!resizeStartRef.current) return;
           const { corner, startX, startY, startWidth, startHeight, mouseX, mouseY } = resizeStartRef.current;
           const deltaX = (e.clientX - mouseX) / scale;
           const deltaY = (e.clientY - mouseY) / scale;
@@ -611,11 +623,12 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
               onUpdateTransform(layer.id, newX, newY, newWidth, newHeight);
           }
       };
-      const handleGlobalMouseUp = () => { 
+      const handleGlobalMouseUp = () => {
           if (isResizingLayer) { setIsResizingLayer(false); resizeStartRef.current = null; onDragEnd(layer.id); }
           if (isResizingCrop) { setIsResizingCrop(false); resizeStartRef.current = null; }
       };
-      if (isResizingLayer || isResizingCrop) { window.addEventListener('mousemove', handleGlobalMouseMove); window.addEventListener('mouseup', handleGlobalMouseUp); }
+      window.addEventListener('mousemove', handleGlobalMouseMove);
+      window.addEventListener('mouseup', handleGlobalMouseUp);
       return () => { window.removeEventListener('mousemove', handleGlobalMouseMove); window.removeEventListener('mouseup', handleGlobalMouseUp); };
   }, [isResizingLayer, isResizingCrop, layer.id, onUpdateTransform, onDragEnd, scale, layer.type]);
 
@@ -642,14 +655,17 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
     initialLayerPosRef.current = { x: layer.x, y: layer.y };
   };
   useEffect(() => {
+    // Early exit when not dragging - prevents listener accumulation
+    if (!isDragging) return;
+
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
       const deltaX = (e.clientX - dragStartRef.current.x) / scale;
       const deltaY = (e.clientY - dragStartRef.current.y) / scale;
       onUpdatePosition(layer.id, initialLayerPosRef.current.x + deltaX, initialLayerPosRef.current.y + deltaY);
     };
-    const handleMouseUp = () => { if (isDragging) { setIsDragging(false); onDragEnd(layer.id); } };
-    if (isDragging) { window.addEventListener('mousemove', handleMouseMove); window.addEventListener('mouseup', handleMouseUp); }
+    const handleMouseUp = () => { setIsDragging(false); onDragEnd(layer.id); };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
     return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
   }, [isDragging, layer.id, onUpdatePosition, onDragEnd, scale]);
 
@@ -664,16 +680,29 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       }
   };
   useEffect(() => {
-      if (videoRef.current) {
-          videoRef.current.onended = () => setIsPlaying(false);
-          videoRef.current.onpause = () => setIsPlaying(false);
-          videoRef.current.onplay = () => setIsPlaying(true);
-      }
-      if (audioRef.current) {
-          audioRef.current.onended = () => setIsPlaying(false);
-          audioRef.current.onpause = () => setIsPlaying(false);
-          audioRef.current.onplay = () => setIsPlaying(true);
-      }
+      const video = videoRef.current;
+      const audio = audioRef.current;
+      if (!video && !audio) return;
+
+      const handleEnded = () => setIsPlaying(false);
+      const handlePause = () => setIsPlaying(false);
+      const handlePlay = () => setIsPlaying(true);
+
+      video?.addEventListener('ended', handleEnded);
+      video?.addEventListener('pause', handlePause);
+      video?.addEventListener('play', handlePlay);
+      audio?.addEventListener('ended', handleEnded);
+      audio?.addEventListener('pause', handlePause);
+      audio?.addEventListener('play', handlePlay);
+
+      return () => {
+          video?.removeEventListener('ended', handleEnded);
+          video?.removeEventListener('pause', handlePause);
+          video?.removeEventListener('play', handlePlay);
+          audio?.removeEventListener('ended', handleEnded);
+          audio?.removeEventListener('pause', handlePause);
+          audio?.removeEventListener('play', handlePlay);
+      };
   }, [layer.src]);
 
   // --- Actions ---
@@ -732,7 +761,12 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
               }
           });
       }
-      return canvas.toDataURL('image/png');
+      const dataUrl = canvas.toDataURL('image/png');
+      // Clean up temporary canvas to free memory
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.width = 0;
+      canvas.height = 0;
+      return dataUrl;
   };
 
   const compositeResizeImage = async (): Promise<string | null> => {
@@ -757,7 +791,12 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
               ctx.drawImage(img, -resizeBounds.x, -resizeBounds.y, layer.width, layer.height);
           }
       } catch (e) { console.error("Resize composite error", e); }
-      return canvas.toDataURL('image/png');
+      const dataUrl = canvas.toDataURL('image/png');
+      // Clean up temporary canvas to free memory
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.width = 0;
+      canvas.height = 0;
+      return dataUrl;
   };
 
   // Helper for sticky text wrapping in export

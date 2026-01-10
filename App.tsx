@@ -2,9 +2,9 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { LayerData, ModelId, Attachment, MediaType, VideoMode, Annotation, GenerationTask } from './types';
 import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle, GenerationCallbacks } from './services/geminiService';
-import { saveLayers, loadLayers, saveViewState, loadViewState, saveHistory, loadHistory, clearAllData } from './services/storageService';
+import { saveLayers, loadLayers, saveViewState, loadViewState, saveHistory, loadHistory, clearAllData, emergencyClearAll } from './services/storageService';
 import { generateThumbnail } from './services/thumbnailService';
-import { storeAsset, getAssetUrl, getAssetBase64 } from './services/assetStore';
+import { storeAsset, getAssetUrl, getAssetBase64, deleteAssets } from './services/assetStore';
 import { hasStoredApiKey, setStoredApiKey } from './services/apiKeyService';
 import PromptBar from './components/PromptBar';
 import CanvasLayer from './components/CanvasLayer';
@@ -22,6 +22,45 @@ const MemoizedMinimap = React.memo(Minimap);
 // A simple 1x1 transparent pixel for placeholders
 const PLACEHOLDER_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
+// Cap React history to prevent unbounded memory growth
+const MAX_HISTORY_STATES = 20;
+
+// Limit concurrent API requests to avoid rate limiting
+const MAX_CONCURRENT_REQUESTS = 2;
+
+// Helper to process items with limited concurrency
+async function processWithConcurrency<T, R>(
+  items: T[],
+  processor: (item: T) => Promise<R>,
+  maxConcurrent: number
+): Promise<R[]> {
+  const results: R[] = [];
+  const executing: Promise<void>[] = [];
+
+  for (const item of items) {
+    const promise = processor(item).then(result => {
+      results.push(result);
+    });
+    executing.push(promise);
+
+    if (executing.length >= maxConcurrent) {
+      await Promise.race(executing);
+      // Remove completed promises
+      for (let i = executing.length - 1; i >= 0; i--) {
+        // Check if promise is settled by racing with resolved promise
+        const settled = await Promise.race([
+          executing[i].then(() => true),
+          Promise.resolve(false)
+        ]);
+        if (settled) executing.splice(i, 1);
+      }
+    }
+  }
+
+  await Promise.all(executing);
+  return results;
+}
+
 const getImageDimensions = (src: string): Promise<{width: number, height: number}> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -37,6 +76,11 @@ const getClosestAspectRatio = (width: number, height: number): string => {
   const closest = supported.reduce((prev, curr) => Math.abs(curr.val - r) < Math.abs(prev.val - r) ? curr : prev);
   return closest.str;
 };
+
+// Expose emergency clear on window for console access when app crashes
+if (typeof window !== 'undefined') {
+  (window as unknown as { emergencyClear: typeof emergencyClearAll }).emergencyClear = emergencyClearAll;
+}
 
 const App: React.FC = () => {
   const [layers, setLayers] = useState<LayerData[]>([]);
@@ -105,11 +149,20 @@ const App: React.FC = () => {
 
   const addToHistory = useCallback((newLayers: LayerData[]) => {
       setHistory(prev => {
-          const newHistory = prev.slice(0, historyIndex + 1);
-          newHistory.push(newLayers);
+          let newHistory = prev.slice(0, historyIndex + 1);
+          // Strip referenceImages from history entries to save memory (they're only needed during generation)
+          const strippedLayers = newLayers.map(layer => {
+              const { referenceImages, ...rest } = layer;
+              return rest;
+          });
+          newHistory.push(strippedLayers as LayerData[]);
+          // Cap history length to prevent unbounded memory growth
+          if (newHistory.length > MAX_HISTORY_STATES) {
+              newHistory = newHistory.slice(-MAX_HISTORY_STATES);
+          }
           return newHistory;
       });
-      setHistoryIndex(prev => prev + 1);
+      setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY_STATES - 1));
   }, [historyIndex]);
 
   const undo = useCallback(() => {
@@ -151,11 +204,27 @@ const App: React.FC = () => {
   // Hydrate state from IndexedDB on mount
   useEffect(() => {
     const hydrate = async () => {
+      const HYDRATION_TIMEOUT = 10000; // 10 second timeout
+
+      // Helper to add timeout to any promise
+      const withTimeout = <T,>(promise: Promise<T>, name: string): Promise<T | null> => {
+        return Promise.race([
+          promise,
+          new Promise<null>((resolve) => {
+            setTimeout(() => {
+              console.warn(`${name} timed out after ${HYDRATION_TIMEOUT}ms`);
+              resolve(null);
+            }, HYDRATION_TIMEOUT);
+          })
+        ]);
+      };
+
       try {
+        // Load each independently to avoid one failure blocking others
         const [savedLayers, savedView, savedHistory] = await Promise.all([
-          loadLayers(),
-          loadViewState(),
-          loadHistory()
+          withTimeout(loadLayers().catch(e => { console.error('loadLayers failed:', e); return null; }), 'loadLayers'),
+          withTimeout(loadViewState().catch(e => { console.error('loadViewState failed:', e); return null; }), 'loadViewState'),
+          withTimeout(loadHistory().catch(e => { console.error('loadHistory failed:', e); return null; }), 'loadHistory')
         ]);
         if (savedLayers) setLayers(savedLayers);
         if (savedView) {
@@ -163,11 +232,15 @@ const App: React.FC = () => {
           setScale(savedView.scale);
         }
         if (savedHistory) {
-          setHistory(savedHistory.history);
-          setHistoryIndex(savedHistory.index);
+          // Limit history on load to prevent memory issues
+          const limitedHistory = savedHistory.history.slice(-20);
+          const adjustedIndex = Math.min(savedHistory.index, limitedHistory.length - 1);
+          setHistory(limitedHistory);
+          setHistoryIndex(Math.max(0, adjustedIndex));
         }
       } catch (error) {
         console.error('Failed to hydrate state:', error);
+        console.log('TIP: Run window.emergencyClear() in console to reset all data');
       }
       setIsHydrated(true);
       // Check for API key after hydration
@@ -377,8 +450,16 @@ const App: React.FC = () => {
     setLayers(prev => [...prev, ...placeholders]);
     setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 
-    // Generate all in parallel with cancellation support
-    await Promise.all(placeholders.map(async (placeholder) => {
+    // Fire title generation immediately (non-blocking, runs in parallel with images)
+    const layerIds = placeholders.map(p => p.id);
+    generateLayerTitle(prompt).then(title => {
+        setLayers(prev => prev.map(l =>
+            layerIds.includes(l.id) && !l.error && !l.isLoading ? { ...l, title } : l
+        ));
+    }).catch(e => console.warn('Title generation failed:', e));
+
+    // Process with limited concurrency (2 at a time) to avoid rate limiting
+    await processWithConcurrency(placeholders, async (placeholder) => {
         const task = newTasks.get(placeholder.id);
         if (!task) return;
 
@@ -388,20 +469,17 @@ const App: React.FC = () => {
         };
 
         try {
-            let result; let title = prompt.substring(0, 30);
+            let result;
             if (mediaType === 'video') {
                  let startImage = undefined; let endImage = undefined; let refs: string[] = [];
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks), generateLayerTitle(prompt) ]);
-                 result = videoRes; title = genTitle;
+                 result = await generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
             } else if (mediaType === 'audio') {
-                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }, callbacks), generateLayerTitle(prompt) ]);
-                 result = audioRes; title = genTitle;
+                 result = await generateSpeechContent({ prompt, model, mediaType, voice }, callbacks);
             } else {
-                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
-                result = imageRes; title = genTitle;
+                result = await generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks);
             }
             // Store in asset store for images (blob-based for performance)
             let finalSrc = result.url;
@@ -423,7 +501,8 @@ const App: React.FC = () => {
                   thumbnail = thumbUrl;
                 } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            // Use prompt snippet as temporary title (fire-and-forget title will update later)
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: prompt.substring(0, 30), videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
             // Remove completed task
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         } catch (error: any) {
@@ -434,7 +513,8 @@ const App: React.FC = () => {
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
-    }));
+    }, MAX_CONCURRENT_REQUESTS);
+
     setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true);
   };
 
@@ -495,7 +575,18 @@ const App: React.FC = () => {
     }
     setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 
-    await Promise.all(placeholders.map(async (placeholder, idx) => {
+    // Fire title generation immediately (non-blocking, runs in parallel with images)
+    const layerIds = placeholders.map(p => p.id);
+    generateLayerTitle(prompt).then(title => {
+        setLayers(prev => prev.map(l =>
+            layerIds.includes(l.id) && !l.error && !l.isLoading ? { ...l, title } : l
+        ));
+    }).catch(e => console.warn('Title generation failed:', e));
+
+    let firstSuccessId: string | null = null;
+
+    // Process with limited concurrency (2 at a time) to avoid rate limiting
+    await processWithConcurrency(placeholders, async (placeholder) => {
         const task = newTasks.get(placeholder.id);
         if (!task) return;
 
@@ -505,20 +596,18 @@ const App: React.FC = () => {
         };
 
         try {
-            const allBase64s = attachments.map(a => a.base64); let result; let title = "Remix";
+            const allBase64s = attachments.map(a => a.base64);
+            let result;
             if (mediaType === 'video') {
                  let startImage = undefined; let endImage = undefined; let refs: string[] = [];
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks), generateLayerTitle(prompt) ]);
-                 result = videoRes; title = genTitle;
+                 result = await generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
             } else if (mediaType === 'audio') {
-                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }, callbacks), generateLayerTitle(prompt) ]);
-                 result = audioRes; title = genTitle;
+                 result = await generateSpeechContent({ prompt, model, mediaType, voice }, callbacks);
             } else {
-                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
-                result = imageRes; title = genTitle;
+                result = await generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks);
             }
             // Store in asset store for images (blob-based for performance)
             let finalSrc = result.url;
@@ -540,15 +629,20 @@ const App: React.FC = () => {
                   thumbnail = thumbUrl;
                 } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            // Use "Remix" as temporary title (fire-and-forget title will update later)
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: "Remix", videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            if (!firstSuccessId) firstSuccessId = placeholder.id;
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
-            if (requestCount === 1 && idx === 0) setSelectedLayerId(placeholder.id);
         } catch (error: any) {
             if (error.name === 'AbortError') return;
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
-    }));
+    }, MAX_CONCURRENT_REQUESTS);
+
+    // Select first successful layer if single request
+    if (requestCount === 1 && firstSuccessId) setSelectedLayerId(firstSuccessId);
+
     setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true);
   };
 
@@ -588,10 +682,16 @@ const App: React.FC = () => {
       };
 
       try {
-            const [videoResult, title] = await Promise.all([ generateVideoContent({ prompt: prompt, model: ModelId.VEO_3_1_HIGH, mediaType: 'video', inputVideoMetadata: inputVideoMetadata, resolution: '720p', aspectRatio: '16:9' }, callbacks), generateLayerTitle(prompt) ]);
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: videoResult.url, title: title + " (Ext)", videoMetadata: videoResult.metadata, generationMetadata: videoResult.generationConfig, isLoading: false, duration: 8 }));
+            // Generate video first, then title after to avoid parallel API flooding
+            const videoResult = await generateVideoContent({ prompt: prompt, model: ModelId.VEO_3_1_HIGH, mediaType: 'video', inputVideoMetadata: inputVideoMetadata, resolution: '720p', aspectRatio: '16:9' }, callbacks);
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: videoResult.url, title: prompt.substring(0, 30) + " (Ext)", videoMetadata: videoResult.metadata, generationMetadata: videoResult.generationConfig, isLoading: false, duration: 8 }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholderId); return next; });
             setSelectedLayerId(placeholder.id);
+            // Generate title after video completes
+            try {
+                const title = await generateLayerTitle(prompt);
+                setLayers(prev => prev.map(l => l.id === placeholder.id ? { ...l, title: title + " (Ext)" } : l));
+            } catch (e) { console.warn('Title generation failed:', e); }
       } catch (error: any) {
             if (error.name === 'AbortError') return;
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Extension failed" }));
@@ -815,7 +915,22 @@ const App: React.FC = () => {
       }); 
   }, [addToHistory]);
 
-  const deleteLayer = useCallback((id: string) => { setLayers(prev => { const next = prev.filter(l => l.id !== id); addToHistory(next); return next; }); if (selectedLayerId === id) setSelectedLayerId(null); }, [selectedLayerId, addToHistory]);
+  const deleteLayer = useCallback((id: string) => {
+    setLayers(prev => {
+      const layer = prev.find(l => l.id === id);
+      // Clean up associated assets to prevent orphaned blobs in IndexedDB
+      if (layer) {
+        const assetIds = [layer.imageId, layer.thumbnailId].filter(Boolean) as string[];
+        if (assetIds.length > 0) {
+          deleteAssets(assetIds).catch(console.error);
+        }
+      }
+      const next = prev.filter(l => l.id !== id);
+      addToHistory(next);
+      return next;
+    });
+    if (selectedLayerId === id) setSelectedLayerId(null);
+  }, [selectedLayerId, addToHistory]);
   const duplicateLayer = useCallback((id: string) => { setLayers(prev => { const layer = prev.find(l => l.id === id); if (!layer) return prev; const newLayer: LayerData = { ...layer, id: crypto.randomUUID(), x: layer.x + 20, y: layer.y + 20, title: `${layer.title} (Copy)`, createdAt: Date.now() }; const next = [...prev, newLayer]; addToHistory(next); setSelectedLayerId(newLayer.id); return next; }); }, [addToHistory]);
   const exportLayer = useCallback(async (id: string, format: 'png' | 'jpg' | 'mp4' | 'wav') => {
     const layer = layers.find(l => l.id === id);

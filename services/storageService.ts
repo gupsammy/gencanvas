@@ -267,3 +267,30 @@ export async function clearAllData(): Promise<void> {
     console.error('Failed to clear data:', error);
   }
 }
+
+/**
+ * Emergency clear - deletes ALL IndexedDB databases for this app
+ * Call from browser console: window.emergencyClear()
+ */
+export async function emergencyClearAll(): Promise<void> {
+  console.log('Emergency clear: Deleting all databases...');
+  try {
+    // Delete the main storage database
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.deleteDatabase('gemini-canvas-db');
+      req.onsuccess = () => { console.log('Deleted gemini-canvas-db'); resolve(); };
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => { console.warn('Database deletion blocked - close other tabs'); resolve(); };
+    });
+    // Delete the assets database
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.deleteDatabase('gemini-canvas-assets');
+      req.onsuccess = () => { console.log('Deleted gemini-canvas-assets'); resolve(); };
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => { console.warn('Assets database deletion blocked'); resolve(); };
+    });
+    console.log('Emergency clear complete. Refresh the page.');
+  } catch (e) {
+    console.error('Emergency clear failed:', e);
+  }
+}
