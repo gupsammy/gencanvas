@@ -56,6 +56,7 @@ interface CanvasLayerProps {
   injectedAttachment?: Attachment | null;
   onInjectedAttachmentConsumed?: () => void;
   isSelectionMode?: boolean;
+  hideImageInKonvaMode?: boolean; // When true, hide image content (Konva renders it)
 }
 
 const DRAWING_COLORS = ['#FFFFFF', '#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#6366F1', '#8B5CF6', '#EC4899', '#000000'];
@@ -105,7 +106,8 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   onSelectOnCanvasStart,
   injectedAttachment,
   onInjectedAttachmentConsumed,
-  isSelectionMode = false
+  isSelectionMode = false,
+  hideImageInKonvaMode = false
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -1170,7 +1172,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
           ${!isSelected && !isResizingMode && !isSelectionMode ? 'hover:ring-1 hover:ring-border shadow-xl' : ''}
           ${!isSelected && isSelectionMode ? 'hover:ring-2 hover:ring-primary/70 hover:shadow-lg hover:shadow-primary/20 hover:scale-[1.01]' : ''}
           ${isExtendingMode ? 'ring-2 ring-yellow-500' : ''}
-          ${layer.type === 'group' ? 'border-2 border-dashed' : 'bg-surface'}
+          ${layer.type === 'group' ? 'border-2 border-dashed' : (!hideImageInKonvaMode ? 'bg-surface' : '')}
         `}
         style={{
              width: layer.width > 0 ? layer.width : 'auto',
@@ -1188,39 +1190,44 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
         }}
       >
         {/* Render Layer Content Based on Type */}
+        {/* When Konva is rendering this image, hide the DOM image but keep container for UI */}
         {layer.type === 'image' && (
-          <div className="relative w-full h-full bg-[#101012] pattern-grid-lg">
-            {/* Conditional rendering: only one image in DOM at a time */}
-            {(!shouldShowFullRes || !fullResLoaded) && layer.thumbnail ? (
-              <img
-                src={layer.thumbnail}
-                alt=""
-                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                style={{
-                  transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`
-                }}
-                draggable={false}
-              />
-            ) : (
-              <img
-                src={layer.src}
-                alt={layer.title}
-                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                style={{
-                  transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`
-                }}
-                draggable={false}
-                onLoad={() => setFullResLoaded(true)}
-              />
-            )}
-            {/* Hidden preloader: load full-res in background when needed */}
-            {shouldShowFullRes && !fullResLoaded && layer.thumbnail && (
-              <img
-                src={layer.src}
-                alt=""
-                className="hidden"
-                onLoad={() => setFullResLoaded(true)}
-              />
+          <div className={`relative w-full h-full ${hideImageInKonvaMode ? 'bg-transparent' : 'bg-[#101012] pattern-grid-lg'}`}>
+            {!hideImageInKonvaMode && (
+              <>
+                {/* Conditional rendering: only one image in DOM at a time */}
+                {(!shouldShowFullRes || !fullResLoaded) && layer.thumbnail ? (
+                  <img
+                    src={layer.thumbnail}
+                    alt=""
+                    className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                    style={{
+                      transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`
+                    }}
+                    draggable={false}
+                  />
+                ) : (
+                  <img
+                    src={layer.src}
+                    alt={layer.title}
+                    className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                    style={{
+                      transform: `scaleX(${layer.flipX?-1:1}) scaleY(${layer.flipY?-1:1})`
+                    }}
+                    draggable={false}
+                    onLoad={() => setFullResLoaded(true)}
+                  />
+                )}
+                {/* Hidden preloader: load full-res in background when needed */}
+                {shouldShowFullRes && !fullResLoaded && layer.thumbnail && (
+                  <img
+                    src={layer.src}
+                    alt=""
+                    className="hidden"
+                    onLoad={() => setFullResLoaded(true)}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
@@ -1413,6 +1420,7 @@ export default React.memo(CanvasLayer, (prev, next) => {
     prev.isGenerating === next.isGenerating &&
     prev.generationTask === next.generationTask &&
     prev.injectedAttachment === next.injectedAttachment &&
-    prev.isSelectionMode === next.isSelectionMode
+    prev.isSelectionMode === next.isSelectionMode &&
+    prev.hideImageInKonvaMode === next.hideImageInKonvaMode
   );
 });

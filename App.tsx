@@ -8,6 +8,7 @@ import { storeAsset, getAssetUrl, getAssetBase64, deleteAssets } from './service
 import { hasStoredApiKey, setStoredApiKey } from './services/apiKeyService';
 import PromptBar from './components/PromptBar';
 import CanvasLayer from './components/CanvasLayer';
+import KonvaCanvas from './components/KonvaCanvas';
 import Sidebar from './components/Sidebar';
 import Minimap from './components/Minimap';
 import ApiKeyModal from './components/ApiKeyModal';
@@ -18,6 +19,10 @@ import { STICKY_COLORS, GROUP_COLORS } from './constants';
 const MemoizedPromptBar = React.memo(PromptBar);
 const MemoizedSidebar = React.memo(Sidebar);
 const MemoizedMinimap = React.memo(Minimap);
+const MemoizedKonvaCanvas = React.memo(KonvaCanvas);
+
+// Feature flag: use Konva for high-performance image layer rendering
+const USE_KONVA_RENDERER = true;
 
 // A simple 1x1 transparent pixel for placeholders
 const PLACEHOLDER_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -1226,9 +1231,32 @@ const App: React.FC = () => {
                 </div>
              </div>
         )}
-        <div style={{ transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '100%', height: '100%', pointerEvents: 'none' }} className="absolute top-0 left-0">
-            {/* Viewport culling: only render visible layers */}
-            {visibleLayers.map(layer => (
+
+        {/* Konva Canvas - high performance rendering for image layers */}
+        {USE_KONVA_RENDERER && (
+          <div className="absolute inset-0 z-[1]">
+            <MemoizedKonvaCanvas
+              layers={layers}
+              selectedLayerId={selectedLayerId}
+              onSelectLayer={setSelectedLayerId}
+              onUpdatePosition={updateLayerPosition}
+              onUpdateTransform={updateLayerTransform}
+              generationTasks={generationTasks}
+              isSelectionMode={isSelectionMode}
+              canvasOffset={canvasOffset}
+              scale={scale}
+              onCanvasOffsetChange={setCanvasOffset}
+              onScaleChange={setScale}
+            />
+          </div>
+        )}
+
+        {/* DOM layer for non-image layers + selected layer UI overlays */}
+        <div style={{ transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${scale})`, transformOrigin: '0 0', width: '100%', height: '100%', pointerEvents: 'none' }} className="absolute top-0 left-0 z-[2]">
+            {/* When Konva is enabled, only render non-image layers OR selected image layers (for toolbar/menu) */}
+            {visibleLayers
+              .filter(layer => !USE_KONVA_RENDERER || layer.type !== 'image' || layer.isLoading || layer.id === selectedLayerId)
+              .map(layer => (
             <div key={layer.id} className="pointer-events-auto">
                  <CanvasLayer
                     layer={layer}
@@ -1258,10 +1286,11 @@ const App: React.FC = () => {
                     injectedAttachment={selectionOriginLayerId === layer.id ? injectedAttachment : null}
                     onInjectedAttachmentConsumed={clearInjectedAttachment}
                     isSelectionMode={isSelectionMode}
+                    hideImageInKonvaMode={USE_KONVA_RENDERER && layer.type === 'image' && !layer.isLoading}
                 />
             </div>
             ))}
-            
+
             {/* Snap Lines - Warm Ember amber */}
             {snapLines?.vertical !== undefined && (
                 <div className="absolute top-[-10000px] bottom-[-10000px] w-px border-l border-dashed border-primary z-[100]" style={{ left: snapLines.vertical }}></div>
