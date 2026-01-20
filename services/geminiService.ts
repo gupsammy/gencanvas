@@ -3,13 +3,78 @@ import { GoogleGenAI, Part, Modality } from '@google/genai';
 import { ModelId, GenerateOptions, GenerationMetadata } from '../types';
 import { getStoredApiKey } from './apiKeyService';
 
-// Helper to get fresh client - uses stored API key or falls back to env var
-const getAiClient = () => {
+// Singleton client for connection reuse and HTTP/2 multiplexing
+let cachedClient: GoogleGenAI | null = null;
+let cachedApiKey: string | null = null;
+
+// Client configuration optimized for parallel requests
+const CLIENT_CONFIG = {
+  timeout: 180000,      // 3 minutes for 4K images (default is 60s)
+  maxRetries: 3,        // Retry on transient failures
+};
+
+// Get or create singleton client - reuses connections for better parallel performance
+const getAiClient = (): GoogleGenAI => {
   const apiKey = getStoredApiKey() || process.env.API_KEY;
   if (!apiKey) {
     throw new Error('No API key configured. Please add your Gemini API key.');
   }
-  return new GoogleGenAI({ apiKey });
+
+  // Return cached client if API key hasn't changed
+  if (cachedClient && cachedApiKey === apiKey) {
+    return cachedClient;
+  }
+
+  // Create new client with optimized settings
+  cachedClient = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      timeout: CLIENT_CONFIG.timeout,
+    }
+  });
+  cachedApiKey = apiKey;
+
+  return cachedClient;
+};
+
+// Reset client (call when API key changes)
+export const resetAiClient = () => {
+  cachedClient = null;
+  cachedApiKey = null;
+};
+
+// Minimum expected base64 lengths for different image sizes (approximate)
+const MIN_BASE64_LENGTHS: Record<string, number> = {
+  '1K': 100000,    // ~100KB minimum for 1K
+  '2K': 400000,    // ~400KB minimum for 2K
+  '4K': 1000000,   // ~1MB minimum for 4K
+};
+
+// Validate response data to detect truncation
+const validateImageResponse = (
+  data: string | undefined,
+  finishReason: string | undefined,
+  imageSize: string = '1K'
+): void => {
+  if (!data) {
+    throw new Error('No image data in response');
+  }
+
+  // Check finish reason
+  if (finishReason && finishReason !== 'STOP' && finishReason !== 'END_TURN') {
+    console.warn(`Unexpected finishReason: ${finishReason} - response may be incomplete`);
+  }
+
+  // Check for minimum expected size
+  const minLength = MIN_BASE64_LENGTHS[imageSize] || MIN_BASE64_LENGTHS['1K'];
+  if (data.length < minLength) {
+    console.warn(`Image data smaller than expected: ${data.length} chars (expected >=${minLength} for ${imageSize}). May be truncated.`);
+  }
+
+  // Validate base64 format (should be divisible by 4)
+  if (data.length % 4 !== 0) {
+    throw new Error(`Invalid base64 data: length ${data.length} not divisible by 4 - likely truncated`);
+  }
 };
 
 // Export getter for API key (used in video download)
@@ -208,9 +273,8 @@ export const generateImageContent = async (options: GenerateOptions, callbacks?:
       });
     });
 
-    // Enforce image generation behavior by prepending a clear directive
-    const effectivePrompt = `Generate an image of: ${prompt}`;
-    parts.push({ text: effectivePrompt });
+    // Use prompt directly - reference mapping already prepended by buildPromptWithReferences
+    parts.push({ text: prompt });
 
     // Map creativity (0-100) to temperature
     const temperature = creativity / 100;
@@ -247,10 +311,16 @@ export const generateImageContent = async (options: GenerateOptions, callbacks?:
       throw new Error("No candidates returned from Gemini.");
     }
 
-    const contentParts = candidates[0].content.parts;
+    const candidate = candidates[0];
+    const finishReason = candidate.finishReason;
+    const contentParts = candidate.content.parts;
     const imagePart = contentParts.find(p => p.inlineData);
 
     if (imagePart && imagePart.inlineData) {
+      // Validate response to detect truncation
+      const effectiveImageSize = model === ModelId.GEMINI_3_PRO_IMAGE ? imageSize : '1K';
+      validateImageResponse(imagePart.inlineData.data, finishReason, effectiveImageSize);
+
       onProgress?.(100);
       return {
           url: `data:${imagePart.inlineData.mimeType || 'image/png'};base64,${imagePart.inlineData.data}`,
