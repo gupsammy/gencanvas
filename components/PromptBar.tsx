@@ -224,7 +224,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const newAttachments: Attachment[] = [];
-      
+
       for (let i = 0; i < e.target.files.length; i++) {
         const file = e.target.files[i];
         if (!file.type.startsWith('image/')) continue;
@@ -238,13 +238,14 @@ const PromptBar: React.FC<PromptBarProps> = ({
               previewUrl: URL.createObjectURL(file),
               mimeType: file.type,
               base64: event.target?.result as string,
+              displayName: file.name, // Use filename for @image references
             });
           };
         });
         reader.readAsDataURL(file);
         newAttachments.push(await promise);
       }
-      
+
       setAttachments(prev => [...prev, ...newAttachments]);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -587,21 +588,46 @@ const PromptBar: React.FC<PromptBarProps> = ({
         </div>
       )}
 
-      {/* Attachments Preview Area */}
-      {attachments.length > 0 && (
+      {/* Attachments Preview Area - Context attachments (current layer) + user attachments */}
+      {(contextAttachments.length > 0 || attachments.length > 0) && (
         <div className="flex gap-2 mb-3 overflow-x-auto p-1 scrollbar-hide">
+          {/* Context attachments (e.g., current layer being edited) */}
+          {contextAttachments.map((att, idx) => (
+            <div key={`ctx-${att.id}`} className="relative group shrink-0">
+              <div className={`rounded-lg border border-primary/50 overflow-hidden relative ${isGlobal ? 'w-16 h-16' : 'w-10 h-10'}`}>
+                <img src={att.previewUrl} alt="Current layer" className="w-full h-full object-cover" />
+                {/* Number badge for @image reference */}
+                <div
+                  className="absolute top-0.5 left-0.5 bg-primary text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow-sm"
+                  title={`@image${idx + 1} - ${att.displayName || 'Current Layer'}`}
+                >
+                  {idx + 1}
+                </div>
+              </div>
+            </div>
+          ))}
+          {/* User-added attachments */}
           {attachments.map((att, idx) => {
             const label = getLabelForAttachment(idx);
+            // Calculate global index including context attachments for @image references
+            const globalIndex = idx + contextAttachments.length + 1;
             return (
                 <div key={att.id} className="relative group shrink-0">
                 <div className={`rounded-lg border border-border overflow-hidden relative ${isGlobal ? 'w-16 h-16' : 'w-10 h-10'}`}>
                     <img src={att.previewUrl} alt="Preview" className="w-full h-full object-cover" />
+                    {/* Number badge for @image reference */}
+                    <div
+                      className="absolute top-0.5 left-0.5 bg-primary text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow-sm"
+                      title={`@image${globalIndex} - ${att.displayName || att.file.name}`}
+                    >
+                      {globalIndex}
+                    </div>
                     {label && (
                         <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[7px] text-center text-white font-bold py-0.5 truncate px-1">
                             {label}
                         </div>
                     )}
-                    <button 
+                    <button
                     onClick={() => removeAttachment(att.id)}
                     className="absolute top-0.5 right-0.5 bg-black/50 hover:bg-red-500/80 text-white rounded-full p-0.5 transition-colors"
                     >

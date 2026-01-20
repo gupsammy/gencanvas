@@ -805,7 +805,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       const supported = [{ s: '1:1', v: 1 }, { s: '16:9', v: 16/9 }, { s: '9:16', v: 9/16 }, { s: '3:4', v: 0.75 }, { s: '4:3', v: 1.33 }, { s: '3:2', v: 1.5 }, { s: '2:3', v: 0.66 }, { s: '5:4', v: 1.25 }, { s: '4:5', v: 0.8 }];
       const closest = supported.reduce((prev, curr) => Math.abs(curr.v - ratioVal) < Math.abs(prev.v - ratioVal) ? curr : prev);
       
-      const attachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: comp, mimeType: 'image/png', base64: comp };
+      const attachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: comp, mimeType: 'image/png', base64: comp, displayName: layer.title };
       
       // Update the layer position/size to match the new bounds before generating (so it replaces seamlessly)
       // Actually, we usually want to generate a new layer or replace this one. 
@@ -817,7 +817,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
       setIsResizingMode(false);
   };
   
-  const layerAttachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: layer.src, mimeType: layer.type === 'video' ? 'video/mp4' : 'image/png', base64: resolvedBase64 };
+  const layerAttachment: Attachment = { id: layer.id, file: new File([], "layer.png"), previewUrl: layer.src, mimeType: layer.type === 'video' ? 'video/mp4' : 'image/png', base64: resolvedBase64, displayName: layer.title };
 
   if (layer.isLoading) {
     const progress = generationTask?.progress || 0;

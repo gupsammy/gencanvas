@@ -5,6 +5,7 @@ export interface Attachment {
   previewUrl: string;
   mimeType: string;
   base64: string;
+  displayName?: string; // layer.title or file.name for @image references
 }
 
 export enum ModelId {

@@ -33,6 +33,19 @@ const getClosestAspectRatio = (width: number, height: number): string => {
   return closest.str;
 };
 
+// Build prompt with reference image mapping for @image1, @image2 syntax
+const buildPromptWithReferences = (prompt: string, attachments: Attachment[]): string => {
+  if (attachments.length === 0) return prompt;
+
+  const lines = ['Reference images:'];
+  attachments.forEach((att, i) => {
+    lines.push(`@image${i + 1} - ${att.displayName || att.file.name}`);
+  });
+  lines.push('');
+  lines.push(prompt);
+  return lines.join('\n');
+};
+
 const App: React.FC = () => {
   const [layers, setLayers] = useState<LayerData[]>([]);
   const [history, setHistory] = useState<LayerData[][]>([[]]);
@@ -259,7 +272,7 @@ const App: React.FC = () => {
           const assetBase64 = await getAssetBase64(layer.imageId);
           if (assetBase64) base64Data = assetBase64;
       }
-      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
+      const attachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data, displayName: layer.title || 'reference' };
       if (selectionTarget === 'global') setGlobalAttachments(prev => [...prev, attachment]); else if (selectionTarget === 'layer') setInjectedAttachment(attachment);
       setIsSelectionMode(false); setSelectionTarget(null);
   };
@@ -366,7 +379,10 @@ const App: React.FC = () => {
     setLayers(prev => [...prev, ...placeholders]);
     setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 
-    // Generate all in parallel with cancellation support
+    // Generate title once for the batch
+    const title = await generateLayerTitle(prompt);
+
+    // Generate in parallel - singleton client enables HTTP/2 multiplexing
     await Promise.all(placeholders.map(async (placeholder) => {
         const task = newTasks.get(placeholder.id);
         if (!task) return;
@@ -377,20 +393,19 @@ const App: React.FC = () => {
         };
 
         try {
-            let result; let title = prompt.substring(0, 30);
+            let result;
             if (mediaType === 'video') {
                  let startImage = undefined; let endImage = undefined; let refs: string[] = [];
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks), generateLayerTitle(prompt) ]);
-                 result = videoRes; title = genTitle;
+                 result = await generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
             } else if (mediaType === 'audio') {
-                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }, callbacks), generateLayerTitle(prompt) ]);
-                 result = audioRes; title = genTitle;
+                 result = await generateSpeechContent({ prompt, model, mediaType, voice }, callbacks);
             } else {
-                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
-                result = imageRes; title = genTitle;
+                // Build prompt with @image reference mapping for image generation
+                const promptWithRefs = buildPromptWithReferences(prompt, attachments);
+                result = await generateImageContent({ prompt: promptWithRefs, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks);
             }
             // Store in asset store for images (blob-based for performance)
             let finalSrc = result.url;
@@ -423,7 +438,7 @@ const App: React.FC = () => {
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
-    }));
+    }))
     setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true);
   };
 
@@ -470,6 +485,11 @@ const App: React.FC = () => {
     }
     setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 
+    // Generate title once for the batch
+    const title = await generateLayerTitle(prompt);
+    const allBase64s = attachments.map(a => a.base64);
+
+    // Generate in parallel - singleton client enables HTTP/2 multiplexing
     await Promise.all(placeholders.map(async (placeholder, idx) => {
         const task = newTasks.get(placeholder.id);
         if (!task) return;
@@ -480,20 +500,19 @@ const App: React.FC = () => {
         };
 
         try {
-            const allBase64s = attachments.map(a => a.base64); let result; let title = "Remix";
+            let result;
             if (mediaType === 'video') {
                  let startImage = undefined; let endImage = undefined; let refs: string[] = [];
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 const [videoRes, genTitle] = await Promise.all([ generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks), generateLayerTitle(prompt) ]);
-                 result = videoRes; title = genTitle;
+                 result = await generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
             } else if (mediaType === 'audio') {
-                 const [audioRes, genTitle] = await Promise.all([ generateSpeechContent({ prompt, model, mediaType, voice }, callbacks), generateLayerTitle(prompt) ]);
-                 result = audioRes; title = genTitle;
+                 result = await generateSpeechContent({ prompt, model, mediaType, voice }, callbacks);
             } else {
-                const [imageRes, genTitle] = await Promise.all([ generateImageContent({ prompt, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks), generateLayerTitle(prompt) ]);
-                result = imageRes; title = genTitle;
+                // Build prompt with @image reference mapping for image generation
+                const promptWithRefs = buildPromptWithReferences(prompt, attachments);
+                result = await generateImageContent({ prompt: promptWithRefs, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks);
             }
             // Store in asset store for images (blob-based for performance)
             let finalSrc = result.url;
@@ -523,7 +542,7 @@ const App: React.FC = () => {
             setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
-    }));
+    }))
     setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true);
   };
 
@@ -873,7 +892,7 @@ const App: React.FC = () => {
           const assetBase64 = await getAssetBase64(layer.imageId);
           if (assetBase64) base64Data = assetBase64;
       }
-      const newAttachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data };
+      const newAttachment: Attachment = { id: crypto.randomUUID(), file: new File([], `${layer.title || 'reference'}.png`, { type: 'image/png' }), previewUrl: layer.src, mimeType: 'image/png', base64: base64Data, displayName: layer.title || 'reference' };
       setGlobalAttachments(prev => [...prev, newAttachment]);
       setSelectedLayerId(null);
       setTimeout(() => promptInputRef.current?.focus(), 50);
