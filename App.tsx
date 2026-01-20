@@ -427,7 +427,7 @@ const App: React.FC = () => {
                   thumbnail = thumbUrl;
                 } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
             // Remove completed task
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         } catch (error: any) {
@@ -435,7 +435,7 @@ const App: React.FC = () => {
                 // Cancelled - layer already removed by cancelGeneration
                 return;
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
     }))
@@ -534,12 +534,12 @@ const App: React.FC = () => {
                   thumbnail = thumbUrl;
                 } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
             if (requestCount === 1 && idx === 0) setSelectedLayerId(placeholder.id);
         } catch (error: any) {
             if (error.name === 'AbortError') return;
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
     }))

@@ -108,6 +108,9 @@ const PromptBar: React.FC<PromptBarProps> = ({
 
   // Video Mode State
   const [videoMode, setVideoMode] = useState<VideoMode>(initialValues?.videoMode || savedSettings?.videoMode || 'standard');
+
+  // Inline error state (replaces browser alerts)
+  const [validationError, setValidationError] = useState<string | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modeMenuRef = useRef<HTMLDivElement>(null);
@@ -258,22 +261,23 @@ const PromptBar: React.FC<PromptBarProps> = ({
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
+    setValidationError(null); // Clear previous errors
     if ((!prompt.trim() && attachments.length === 0 && contextAttachments.length === 0) || isGenerating) return;
-    
+
     const allAttachments = [...contextAttachments, ...attachments];
 
     // Validation for Frame Interpolation
     if (mediaType === 'video' && videoMode === 'interpolation') {
         if (allAttachments.length !== 2) {
-            alert("Frame Interpolation requires exactly 2 images: Start Frame and End Frame. Please add an End Frame.");
+            setValidationError("Frame Interpolation requires exactly 2 images: Start Frame and End Frame.");
             return;
         }
     }
-    
+
     // Validation for Reference Images
     if (mediaType === 'video' && videoMode === 'references') {
         if (allAttachments.length > 3) {
-            alert("Veo Reference mode supports a maximum of 3 reference images.");
+            setValidationError("Veo Reference mode supports a maximum of 3 reference images.");
             return;
         }
     }
@@ -588,6 +592,19 @@ const PromptBar: React.FC<PromptBarProps> = ({
         </div>
       )}
 
+      {/* Validation Error Banner */}
+      {validationError && (
+        <div className="mb-3 flex items-center gap-2 p-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-xs">
+          <span className="flex-1">{validationError}</span>
+          <button
+            onClick={() => setValidationError(null)}
+            className="p-0.5 hover:bg-red-500/20 rounded transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {/* Attachments Preview Area - Context attachments (current layer) + user attachments */}
       {(contextAttachments.length > 0 || attachments.length > 0) && (
         <div className="flex gap-2 mb-3 overflow-x-auto p-1 scrollbar-hide">
@@ -629,9 +646,10 @@ const PromptBar: React.FC<PromptBarProps> = ({
                     )}
                     <button
                     onClick={() => removeAttachment(att.id)}
-                    className="absolute top-0.5 right-0.5 bg-black/50 hover:bg-red-500/80 text-white rounded-full p-0.5 transition-colors"
+                    className="absolute top-0.5 right-0.5 bg-black/60 text-white/70 hover:bg-red-500 hover:text-white rounded-full p-0.5 transition-colors"
+                    title="Remove attachment"
                     >
-                    <X size={10} />
+                    <X size={12} />
                     </button>
                 </div>
                 </div>
@@ -691,11 +709,17 @@ const PromptBar: React.FC<PromptBarProps> = ({
             <div className="relative shrink-0" ref={attachMenuRef}>
                  <button
                     onClick={() => setShowAttachMenu(!showAttachMenu)}
-                    className="p-2.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
+                    className="p-2.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-colors relative"
                     title="Attach Media"
                     disabled={isGenerating}
                  >
                     <Paperclip size={20} />
+                    {/* Attachment count badge */}
+                    {(attachments.length + contextAttachments.length) > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-primary text-white text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1">
+                        {attachments.length + contextAttachments.length}
+                      </span>
+                    )}
                  </button>
 
                  {showAttachMenu && (
@@ -761,8 +785,11 @@ const PromptBar: React.FC<PromptBarProps> = ({
                 className={`p-3 rounded-xl flex items-center justify-center transition-all duration-200 ${
                 isGenerating
                     ? 'bg-primary/50 cursor-not-allowed'
-                    : 'bg-primary hover:bg-primary-hover hover:scale-105 text-white shadow-lg shadow-primary/30'
+                    : (!prompt.trim() && attachments.length === 0 && contextAttachments.length === 0)
+                      ? 'bg-primary/30 cursor-not-allowed text-white/50'
+                      : 'bg-primary hover:bg-primary-hover hover:scale-105 text-white shadow-lg shadow-primary/30'
                 }`}
+                title={(!prompt.trim() && attachments.length === 0 && contextAttachments.length === 0) ? "Add a prompt or attach media to generate" : isGenerating ? "Generating..." : "Generate"}
             >
                 {isGenerating ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
             </button>
