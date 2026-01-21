@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { LayerData, ModelId, Attachment, MediaType, VideoMode, Annotation, GenerationTask } from './types';
-import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle, GenerationCallbacks } from './services/geminiService';
+import { generateImageContent, generateVideoContent, generateSpeechContent, generateLayerTitle, improvePrompt, GenerationCallbacks } from './services/geminiService';
 import { saveLayers, loadLayers, saveViewState, loadViewState, saveHistory, loadHistory, clearAllData } from './services/storageService';
 import { generateThumbnail } from './services/thumbnailService';
 import { storeAsset, getAssetUrl, getAssetBase64 } from './services/assetStore';
@@ -331,7 +331,7 @@ const App: React.FC = () => {
   };
 
   // --- Generation Handlers ---
-  const handleGlobalGenerate = async (prompt: string, attachments: Attachment[], model: ModelId, aspectRatio: string, creativity: number, imageSize: string, resolution: '720p' | '1080p', mediaType: MediaType, duration: string, videoMode: VideoMode, startImageIndex?: number, count: number = 1, voice?: string) => {
+  const handleGlobalGenerate = async (prompt: string, attachments: Attachment[], model: ModelId, aspectRatio: string, creativity: number, imageSize: string, resolution: '720p' | '1080p', mediaType: MediaType, duration: string, videoMode: VideoMode, startImageIndex?: number, count: number = 1, voice?: string, shouldImprovePrompt: boolean = false) => {
     const requestCount = mediaType === 'video' || mediaType === 'audio' ? 1 : count;
     const allBase64s = attachments.map(a => a.base64);
     let finalAspectRatio = aspectRatio;
@@ -352,6 +352,7 @@ const App: React.FC = () => {
     const startX = centerX - ((cols * width + (cols - 1) * gap) / 2);
     const startY = centerY - ((Math.ceil(requestCount/cols) * height + (Math.ceil(requestCount/cols) - 1) * gap) / 2);
 
+    // 1. Create placeholders IMMEDIATELY (before any API calls)
     const placeholders: LayerData[] = [];
     const newTasks = new Map<string, GenerationTask>();
 
@@ -361,7 +362,13 @@ const App: React.FC = () => {
         const abortController = new AbortController();
 
         placeholders.push({
-            id: layerId, type: mediaType, x: startX + col * (width + gap), y: startY + row * (height + gap), width, height, src: '', promptUsed: prompt, referenceImages: allBase64s, title: "Generating...", createdAt: Date.now(), isLoading: true,
+            id: layerId, type: mediaType, x: startX + col * (width + gap), y: startY + row * (height + gap), width, height, src: '',
+            promptUsed: prompt,                     // User's original prompt for sidebar
+            improvedPrompt: undefined,              // Will be set after improvement completes
+            lastDraftPrompt: undefined,             // Output layer starts with empty PromptBar
+            referenceImages: allBase64s,
+            title: shouldImprovePrompt && mediaType === 'image' ? "Enhancing..." : "Generating...",
+            createdAt: Date.now(), isLoading: true,
             generationMetadata: { model, aspectRatio: finalAspectRatio, creativity, imageSize, resolution, duration, videoMode, voice }
         });
 
@@ -379,10 +386,23 @@ const App: React.FC = () => {
     setLayers(prev => [...prev, ...placeholders]);
     setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 
-    // Generate title once for the batch
-    const title = await generateLayerTitle(prompt);
+    // 2. Run prompt improvement and title generation IN PARALLEL
+    const [enhancedPrompt, title] = await Promise.all([
+        shouldImprovePrompt && mediaType === 'image' && prompt.trim()
+            ? improvePrompt(prompt, attachments).catch(() => undefined)
+            : Promise.resolve(undefined),
+        generateLayerTitle(prompt)
+    ]);
 
-    // Generate in parallel - singleton client enables HTTP/2 multiplexing
+    // 3. Update placeholders with title and improved prompt
+    const apiPrompt = enhancedPrompt || prompt;
+    setLayers(prev => prev.map(l =>
+        placeholders.some(p => p.id === l.id)
+            ? { ...l, title: title || l.title, improvedPrompt: enhancedPrompt }
+            : l
+    ));
+
+    // 4. Generate content using improved prompt (if available)
     await Promise.all(placeholders.map(async (placeholder) => {
         const task = newTasks.get(placeholder.id);
         if (!task) return;
@@ -399,12 +419,12 @@ const App: React.FC = () => {
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 result = await generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
+                 result = await generateVideoContent({ prompt: apiPrompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
             } else if (mediaType === 'audio') {
-                 result = await generateSpeechContent({ prompt, model, mediaType, voice }, callbacks);
+                 result = await generateSpeechContent({ prompt: apiPrompt, model, mediaType, voice }, callbacks);
             } else {
                 // Build prompt with @image reference mapping for image generation
-                const promptWithRefs = buildPromptWithReferences(prompt, attachments);
+                const promptWithRefs = buildPromptWithReferences(apiPrompt, attachments);
                 result = await generateImageContent({ prompt: promptWithRefs, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks);
             }
             // Store in asset store for images (blob-based for performance)
@@ -427,7 +447,7 @@ const App: React.FC = () => {
                   thumbnail = thumbUrl;
                 } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
             // Remove completed task
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         } catch (error: any) {
@@ -435,16 +455,24 @@ const App: React.FC = () => {
                 // Cancelled - layer already removed by cancelGeneration
                 return;
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, isLoading: false, error: error.message || "Generation failed" }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
     }))
     setLayers(current => { addToHistory(current); return current; }); setIsSidebarOpen(true);
   };
 
-  const handleLayerGenerate = async (originalLayerId: string, prompt: string, attachments: Attachment[], model: ModelId, aspectRatio: string, creativity: number, imageSize: string, resolution: '720p' | '1080p', mediaType: MediaType, duration: string, videoMode: VideoMode, startImageIndex?: number, count: number = 1, voice?: string) => {
+  const handleLayerGenerate = async (originalLayerId: string, prompt: string, attachments: Attachment[], model: ModelId, aspectRatio: string, creativity: number, imageSize: string, resolution: '720p' | '1080p', mediaType: MediaType, duration: string, videoMode: VideoMode, startImageIndex?: number, count: number = 1, voice?: string, shouldImprovePrompt: boolean = false) => {
     const original = layers.find(l => l.id === originalLayerId);
     if (!original) return;
+
+    // Save the draft prompt to the source layer (so it remembers what was typed)
+    setLayers(prev => prev.map(l =>
+      l.id === originalLayerId
+        ? { ...l, lastDraftPrompt: prompt }
+        : l
+    ));
+
     const requestCount = mediaType === 'video' || mediaType === 'audio' ? 1 : count;
     let finalAspectRatio = aspectRatio === 'Auto' ? (mediaType === 'video' ? '16:9' : resolveAspectRatio(aspectRatio, original)) : aspectRatio;
 
@@ -457,6 +485,7 @@ const App: React.FC = () => {
 
     const gap = 20; const cols = Math.ceil(Math.sqrt(requestCount));
 
+    // 1. Create placeholders IMMEDIATELY (before any API calls)
     const placeholders: LayerData[] = [];
     const newTasks = new Map<string, GenerationTask>();
 
@@ -465,7 +494,16 @@ const App: React.FC = () => {
         const layerId = crypto.randomUUID();
         const abortController = new AbortController();
 
-        placeholders.push({ id: layerId, type: mediaType, x: pos.x + col * (width + gap), y: pos.y + row * (height + gap), width, height, src: '', promptUsed: prompt, referenceImages: attachments.map(a => a.base64), title: "Remixing...", createdAt: Date.now(), isLoading: true, generationMetadata: { model, aspectRatio: finalAspectRatio, creativity, imageSize, resolution, duration, videoMode, voice } });
+        placeholders.push({
+            id: layerId, type: mediaType, x: pos.x + col * (width + gap), y: pos.y + row * (height + gap), width, height, src: '',
+            promptUsed: prompt,                 // User's original prompt for sidebar
+            improvedPrompt: undefined,          // Will be set after improvement completes
+            lastDraftPrompt: undefined,         // Output layer starts with empty PromptBar
+            referenceImages: attachments.map(a => a.base64),
+            title: shouldImprovePrompt && mediaType === 'image' ? "Enhancing..." : "Remixing...",
+            createdAt: Date.now(), isLoading: true,
+            generationMetadata: { model, aspectRatio: finalAspectRatio, creativity, imageSize, resolution, duration, videoMode, voice }
+        });
 
         newTasks.set(layerId, {
             id: crypto.randomUUID(),
@@ -485,11 +523,24 @@ const App: React.FC = () => {
     }
     setGenerationTasks(prev => new Map([...prev, ...newTasks]));
 
-    // Generate title once for the batch
-    const title = await generateLayerTitle(prompt);
+    // 2. Run prompt improvement and title generation IN PARALLEL
     const allBase64s = attachments.map(a => a.base64);
+    const [enhancedPrompt, title] = await Promise.all([
+        shouldImprovePrompt && mediaType === 'image' && prompt.trim()
+            ? improvePrompt(prompt, attachments).catch(() => undefined)
+            : Promise.resolve(undefined),
+        generateLayerTitle(prompt)
+    ]);
 
-    // Generate in parallel - singleton client enables HTTP/2 multiplexing
+    // 3. Update placeholders with title and improved prompt
+    const apiPrompt = enhancedPrompt || prompt;
+    setLayers(prev => prev.map(l =>
+        placeholders.some(p => p.id === l.id)
+            ? { ...l, title: title || l.title, improvedPrompt: enhancedPrompt }
+            : l
+    ));
+
+    // 4. Generate content using improved prompt (if available)
     await Promise.all(placeholders.map(async (placeholder, idx) => {
         const task = newTasks.get(placeholder.id);
         if (!task) return;
@@ -506,12 +557,12 @@ const App: React.FC = () => {
                  if (videoMode === 'standard' && allBase64s.length > 0) startImage = allBase64s[0];
                  else if (videoMode === 'interpolation') { if (allBase64s.length > 0) startImage = allBase64s[0]; if (allBase64s.length > 1) endImage = allBase64s[1]; }
                  else if (videoMode === 'references') { refs = allBase64s; startImage = undefined; }
-                 result = await generateVideoContent({ prompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
+                 result = await generateVideoContent({ prompt: apiPrompt, model, mediaType, videoMode, startImage, endImage, referenceImages: refs, aspectRatio: finalAspectRatio, resolution, durationSeconds: duration }, callbacks);
             } else if (mediaType === 'audio') {
-                 result = await generateSpeechContent({ prompt, model, mediaType, voice }, callbacks);
+                 result = await generateSpeechContent({ prompt: apiPrompt, model, mediaType, voice }, callbacks);
             } else {
                 // Build prompt with @image reference mapping for image generation
-                const promptWithRefs = buildPromptWithReferences(prompt, attachments);
+                const promptWithRefs = buildPromptWithReferences(apiPrompt, attachments);
                 result = await generateImageContent({ prompt: promptWithRefs, model, mediaType, referenceImages: allBase64s, aspectRatio: finalAspectRatio, creativity, imageSize }, callbacks);
             }
             // Store in asset store for images (blob-based for performance)
@@ -534,12 +585,12 @@ const App: React.FC = () => {
                   thumbnail = thumbUrl;
                 } catch (e) { console.warn('Asset storage failed:', e); }
             }
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, src: finalSrc, thumbnail, imageId, thumbnailId, title: title, videoMetadata: result.metadata, generationMetadata: result.generationConfig, isLoading: false, duration: mediaType === 'video' ? parseInt(duration) : undefined }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
             if (requestCount === 1 && idx === 0) setSelectedLayerId(placeholder.id);
         } catch (error: any) {
             if (error.name === 'AbortError') return;
-            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, promptUsed: undefined, isLoading: false, error: error.message || "Generation failed" }));
+            setLayers(prev => prev.map(l => l.id !== placeholder.id ? l : { ...l, isLoading: false, error: error.message || "Generation failed" }));
             setGenerationTasks(prev => { const next = new Map(prev); next.delete(placeholder.id); return next; });
         }
     }))
@@ -1074,7 +1125,7 @@ const App: React.FC = () => {
                     onUpdateColor={updateLayerColor}
                     onUpdateFontSize={updateLayerFontSize}
                     onDragEnd={() => handleDragEnd(layer.id)}
-                    onGenerate={(p, a, m, ar, c, s, res, mt, d, im, si, count, voice) => handleLayerGenerate(layer.id, p, a, m, ar, c, s, res, mt, d, im, si, count, voice)}
+                    onGenerate={(p, a, m, ar, c, s, res, mt, d, vm, si, count, voice, shouldImprovePrompt) => handleLayerGenerate(layer.id, p, a, m, ar, c, s, res, mt, d, vm, si, count, voice, shouldImprovePrompt)}
                     onDelete={deleteLayer}
                     onDuplicate={duplicateLayer}
                     onRename={renameLayer}

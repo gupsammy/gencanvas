@@ -26,19 +26,20 @@ interface CanvasLayerProps {
   onUpdateFontSize?: (id: string, delta: number) => void;
   onDragEnd: (id: string) => void;
   onGenerate: (
-    prompt: string, 
-    attachments: Attachment[], 
-    model: ModelId, 
-    aspectRatio: string, 
-    creativity: number, 
-    imageSize: string, 
-    resolution: '720p' | '1080p', 
+    prompt: string,
+    attachments: Attachment[],
+    model: ModelId,
+    aspectRatio: string,
+    creativity: number,
+    imageSize: string,
+    resolution: '720p' | '1080p',
     mediaType: MediaType,
     duration: string,
     videoMode: VideoMode,
     startImageIndex?: number,
     count?: number,
-    voice?: string
+    voice?: string,
+    shouldImprovePrompt?: boolean
   ) => void;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
@@ -149,7 +150,7 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const [promptAttachments, setPromptAttachments] = useState<Attachment[]>([]);
   const [draftState, setDraftState] = useState<Partial<PromptState>>(() => ({
-      prompt: layer.promptUsed || '',
+      prompt: layer.lastDraftPrompt || '',  // Use draft prompt, not creation prompt (output layers start empty)
       model: (layer.generationMetadata?.model as ModelId) || DEFAULT_MODEL,
       aspectRatio: layer.generationMetadata?.aspectRatio || 'Auto',
       creativity: layer.generationMetadata?.creativity || 65,
@@ -679,16 +680,16 @@ const CanvasLayer: React.FC<CanvasLayerProps> = ({
   const handleDuplicateClick = () => { onDuplicate(layer.id); setShowMenu(false); }
   const handleExtendClick = () => { setIsExtendingMode(!isExtendingMode); setShowMenu(false); };
   
-  const handlePromptSubmit = async (p: string, a: Attachment[], m: ModelId, ar: string, c: number, s: string, res: '720p'|'1080p', mt: MediaType, d: string, vm: VideoMode, si?: number, count?: number, voice?: string) => {
-        if (isExtendingMode && onExtendVideo) { onExtendVideo(layer.id, p); setIsExtendingMode(false); } 
-        else if (isResizingMode) { handleResizeGenerate(p); } 
+  const handlePromptSubmit = async (p: string, a: Attachment[], m: ModelId, ar: string, c: number, s: string, res: '720p'|'1080p', mt: MediaType, d: string, vm: VideoMode, si?: number, count?: number, voice?: string, shouldImprovePrompt?: boolean) => {
+        if (isExtendingMode && onExtendVideo) { onExtendVideo(layer.id, p); setIsExtendingMode(false); }
+        else if (isResizingMode) { handleResizeGenerate(p); }
         else {
             let finalA = a;
             if (layer.annotations && layer.annotations.length > 0) {
                  const comp = await compositeLayerImage();
                  if (comp) finalA = [...finalA, { id: 'comp-'+layer.id, file: new File([],"c.png"), previewUrl: comp, mimeType: 'image/png', base64: comp }];
             }
-            onGenerate(p, finalA, m, ar, c, s, res, mt, d, vm, si, count, voice);
+            onGenerate(p, finalA, m, ar, c, s, res, mt, d, vm, si, count, voice, shouldImprovePrompt);
         }
   };
 

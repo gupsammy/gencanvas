@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Paperclip, Send, X, Loader2, Settings2, Ratio, ThermometerSun, MonitorPlay, Image as ImageIcon, Video, ChevronDown, Palette, Clock, Layers, Film, Copy as CopyIcon, Upload, MousePointer2, Mic } from 'lucide-react';
+import { Paperclip, Send, X, Loader2, Settings2, Ratio, ThermometerSun, MonitorPlay, Image as ImageIcon, Video, ChevronDown, Palette, Clock, Layers, Film, Copy as CopyIcon, Upload, MousePointer2, Mic, Sparkles } from 'lucide-react';
 import { ModelId, Attachment, MediaType, VideoMode, PromptState } from '../types';
 import { AVAILABLE_MODELS, DEFAULT_MODEL, AVAILABLE_VOICES } from '../constants';
 
@@ -18,6 +18,7 @@ interface SavedSettings {
   imageCount: number;
   selectedVoice: string;
   videoMode: VideoMode;
+  improvePromptEnabled: boolean;
 }
 
 const loadSavedSettings = (): Partial<SavedSettings> | null => {
@@ -36,19 +37,20 @@ const saveSettings = (settings: SavedSettings) => {
 
 interface PromptBarProps {
   onSubmit: (
-    prompt: string, 
-    attachments: Attachment[], 
-    model: ModelId, 
-    aspectRatio: string, 
-    creativity: number, 
-    imageSize: string, 
-    resolution: '720p' | '1080p', 
+    prompt: string,
+    attachments: Attachment[],
+    model: ModelId,
+    aspectRatio: string,
+    creativity: number,
+    imageSize: string,
+    resolution: '720p' | '1080p',
     mediaType: MediaType,
     duration: string,
     videoMode: VideoMode,
     startImageIndex?: number, // -1 if none, otherwise index in attachments
     count?: number,
-    voice?: string
+    voice?: string,
+    shouldImprovePrompt?: boolean  // Whether to enhance prompt via AI (handled in App.tsx)
   ) => void;
   isGenerating: boolean;
   initialValues?: Partial<PromptState>;
@@ -109,6 +111,9 @@ const PromptBar: React.FC<PromptBarProps> = ({
   // Video Mode State
   const [videoMode, setVideoMode] = useState<VideoMode>(initialValues?.videoMode || savedSettings?.videoMode || 'standard');
 
+  // Prompt Improvement Toggle
+  const [improvePromptEnabled, setImprovePromptEnabled] = useState(savedSettings?.improvePromptEnabled ?? false);
+
   // Inline error state (replaces browser alerts)
   const [validationError, setValidationError] = useState<string | null>(null);
   
@@ -151,10 +156,11 @@ const PromptBar: React.FC<PromptBarProps> = ({
               videoDuration,
               imageCount,
               selectedVoice,
-              videoMode
+              videoMode,
+              improvePromptEnabled
           });
       }
-  }, [prompt, mediaType, selectedModel, aspectRatio, creativity, imageSize, videoResolution, videoDuration, imageCount, selectedVoice, videoMode, isGlobalVariant]);
+  }, [prompt, mediaType, selectedModel, aspectRatio, creativity, imageSize, videoResolution, videoDuration, imageCount, selectedVoice, videoMode, improvePromptEnabled, isGlobalVariant]);
 
 
   // Derived state
@@ -259,7 +265,7 @@ const PromptBar: React.FC<PromptBarProps> = ({
     setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
-  const handleSubmit = (e?: React.FormEvent) => {
+  const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     setValidationError(null); // Clear previous errors
     if ((!prompt.trim() && attachments.length === 0 && contextAttachments.length === 0) || isGenerating) return;
@@ -290,23 +296,25 @@ const PromptBar: React.FC<PromptBarProps> = ({
         if (videoMode === 'references') startImageIndex = -1; // Never animate start frame in references mode
     } else {
         // Image to Image
-         if (allAttachments.length > 0) startImageIndex = -1; 
+         if (allAttachments.length > 0) startImageIndex = -1;
     }
 
+    // Pass prompt as-is, improvement happens in App.tsx for immediate placeholder creation
     onSubmit(
-        prompt, 
-        allAttachments, 
-        selectedModel, 
-        aspectRatio, 
-        creativity, 
-        imageSize, 
-        videoResolution, 
+        prompt,
+        allAttachments,
+        selectedModel,
+        aspectRatio,
+        creativity,
+        imageSize,
+        videoResolution,
         mediaType,
         videoDuration,
         videoMode,
         startImageIndex,
         imageCount,
-        selectedVoice
+        selectedVoice,
+        improvePromptEnabled && mediaType === 'image'  // Only improve for images
     );
   };
 
@@ -777,6 +785,21 @@ const PromptBar: React.FC<PromptBarProps> = ({
                     title="Settings"
                 >
                     <Settings2 size={20} />
+                </button>
+            )}
+            {/* AI Enhance Toggle - Only for image mode */}
+            {!isExtension && mediaType === 'image' && (
+                <button
+                    onClick={() => setImprovePromptEnabled(!improvePromptEnabled)}
+                    disabled={isGenerating}
+                    className={`p-2.5 rounded-xl transition-colors ${
+                        improvePromptEnabled
+                            ? 'text-primary bg-primary/10'
+                            : 'text-gray-400 hover:text-white hover:bg-white/10'
+                    }`}
+                    title={`AI Prompt Enhancement: ${improvePromptEnabled ? 'ON' : 'OFF'}`}
+                >
+                    <Sparkles size={20} />
                 </button>
             )}
             <button

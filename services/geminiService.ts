@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Modality } from '@google/genai';
-import { ModelId, GenerateOptions, GenerationMetadata } from '../types';
+import { ModelId, GenerateOptions, GenerationMetadata, Attachment } from '../types';
 import { getStoredApiKey } from './apiKeyService';
 
 // Singleton client for connection reuse and HTTP/2 multiplexing
@@ -160,16 +160,111 @@ export const generateLayerTitle = async (prompt: string): Promise<string> => {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
-        parts: [{ 
-            text: `Generate a very short, concise title (max 5 words) for an image/video/audio generated from this prompt: "${prompt}". Return ONLY the title, no quotes.` 
+        parts: [{
+            text: `Generate a very short, concise title (max 5 words) for an image/video/audio generated from this prompt: "${prompt}". Return ONLY the title, no quotes.`
         }],
       },
     });
-    
+
     return response.text?.trim() || prompt.substring(0, 30);
   } catch (error) {
     console.warn("Failed to generate title, falling back to prompt segment", error);
     return prompt.substring(0, 30);
+  }
+};
+
+// Emily's Image Prompt Rewriting Expert system prompt
+const PROMPT_IMPROVEMENT_SYSTEM = `You are an Image Prompt Rewriting Expert. Your job is to take the user's image description (Chinese, English, or mixed) and rewrite it into a single, high-quality English image prompt that is natural, precise, and visually grounded.
+
+### Primary Objective
+Produce an image prompt that preserves the user's intent while maximizing clarity, visual specificity, and adherence to the medium (photography, illustration, design).
+
+### Categorization & Precedence (Strict Order)
+1. **Text-Centric/Design:** The primary focus is written content, layout, or typography (e.g., posters, UI screens, book covers, logos, infographics).
+2. **Portrait/Character:** A human or character is the focus. (Note: Incidental text, such as a logo on a shirt or a street sign in the background, does NOT make it "Text-Centric"—keep it in this category).
+3. **General Scene:** Landscapes, objects, architecture, animals, or abstract concepts where text and characters are secondary.
+
+### Output Format Rules
+- Output **ONLY** the rewritten English prompt.
+- No conversational filler, no markdown headings, no "Here is the prompt."
+- Use a single continuous text block.
+
+### Global Fidelity & Enrichment
+- **Facts:** Preserve all user-provided objects, colors, counts, and specific details.
+- **Enrichment:** Add non-committal visual parameters: lighting (e.g., volumetric, cinematic), camera angle (e.g., low-angle, macro), and textures.
+- **Safety:** Do not infer private attributes. Use "adult" or "young adult" if age is ambiguous.
+- **Style:** Always specify an art style if the user did not.
+
+### Text Handling (Critical)
+- **Quoting:** Enclose all on-image text in straight double quotes: "TEXT"
+- **Fidelity:** Reproduce text exactly, preserving casing and punctuation
+- **Materiality:** Describe the text's physical properties: Font style, color, material, and location
+- **Language:** Keep non-English characters inside quotes, add English descriptor outside
+
+### Category-Specific Guidelines
+**A) Portrait/Character** - Subject appearance, action/pose, setting, lighting
+**B) Text-Centric/Design** - Layout, hierarchy, style
+**C) General Scene** - Composition, atmosphere
+
+### Technical Constraints
+- Preserve any aspect ratio flags, seeds, or model parameters at the end`;
+
+/**
+ * Improves a user prompt using Gemini Flash for better visual specificity.
+ * Sends reference images for context so the AI understands what @image1, etc. refer to.
+ */
+export const improvePrompt = async (
+  prompt: string,
+  attachments: Attachment[]
+): Promise<string> => {
+  try {
+    const ai = getAiClient();
+    const parts: Part[] = [];
+
+    // Add reference images as inline data so AI can see what user is referencing
+    attachments.forEach((att) => {
+      if (att.base64) {
+        const pureBase64 = att.base64.split(',')[1] || att.base64;
+        let mimeType = 'image/png';
+        if (att.base64.startsWith('data:')) {
+          const match = att.base64.match(/data:([^;]+);base64,/);
+          if (match) mimeType = match[1];
+        }
+        parts.push({
+          inlineData: {
+            mimeType: mimeType,
+            data: pureBase64,
+          },
+        });
+      }
+    });
+
+    // Build user message with context about attachments
+    let userMessage = prompt;
+    if (attachments.length > 0) {
+      userMessage = `The user has attached ${attachments.length} reference image(s). They may reference these as @image1, @image2, etc. in their prompt. Please preserve these references in the improved prompt.\n\nUser prompt: ${prompt}`;
+    }
+    parts.push({ text: userMessage });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: { parts },
+      config: {
+        systemInstruction: PROMPT_IMPROVEMENT_SYSTEM,
+        temperature: 0.7,
+      },
+    });
+
+    const improvedPrompt = response.text?.trim();
+    if (!improvedPrompt) {
+      console.warn("Empty response from prompt improvement, using original");
+      return prompt;
+    }
+
+    return improvedPrompt;
+  } catch (error) {
+    console.warn("Prompt improvement failed, using original:", error);
+    return prompt;
   }
 };
 

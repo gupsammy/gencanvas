@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { LayerData } from '../types';
-import { Layers, Info, ChevronRight, ChevronLeft, Image as ImageIcon, Edit2, Video as VideoIcon, Sliders, Cpu, Loader2, AlertCircle, StickyNote, BoxSelect, Pencil, Type as TypeIcon, Folder, FolderOpen, CornerDownRight, Mic, Trash2, Download, Copy, ChevronDown } from 'lucide-react';
+import { Layers, Info, ChevronRight, ChevronLeft, Image as ImageIcon, Edit2, Video as VideoIcon, Sliders, Cpu, Loader2, AlertCircle, StickyNote, BoxSelect, Pencil, Type as TypeIcon, Folder, FolderOpen, CornerDownRight, Mic, Trash2, Download, Copy, ChevronDown, Clipboard } from 'lucide-react';
 
 type ExportFormat = 'png' | 'jpg' | 'mp4' | 'wav';
 
@@ -392,14 +392,44 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, layers, selectedLay
                                 </div>
                             )}
 
-                            {/* Prompt */}
+                            {/* User Prompt */}
                             {selectedLayer.promptUsed && (
-                                <div className="space-y-2.5">
-                                    <div className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider">Prompt</div>
+                                <div className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider">User Prompt</span>
+                                        <button
+                                            onClick={() => navigator.clipboard.writeText(selectedLayer.promptUsed!)}
+                                            className="p-1.5 hover:bg-white/5 rounded-md transition-colors group"
+                                            title="Copy prompt"
+                                        >
+                                            <Clipboard size={12} className="text-stone-600 group-hover:text-stone-400" />
+                                        </button>
+                                    </div>
                                     <div className="bg-gradient-to-br from-primary/5 to-transparent p-3 rounded-lg border border-primary/10 text-xs text-stone-300 leading-relaxed">
                                         <span className="text-primary/60">"</span>
                                         {selectedLayer.promptUsed}
                                         <span className="text-primary/60">"</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Enhanced Prompt (if AI improvement was used) */}
+                            {selectedLayer.improvedPrompt && (
+                                <div className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider">Enhanced Prompt</span>
+                                        <button
+                                            onClick={() => navigator.clipboard.writeText(selectedLayer.improvedPrompt!)}
+                                            className="p-1.5 hover:bg-white/5 rounded-md transition-colors group"
+                                            title="Copy enhanced prompt"
+                                        >
+                                            <Clipboard size={12} className="text-stone-600 group-hover:text-stone-400" />
+                                        </button>
+                                    </div>
+                                    <div className="bg-gradient-to-br from-amber-500/5 to-transparent p-3 rounded-lg border border-amber-500/10 text-xs text-stone-300 leading-relaxed">
+                                        <span className="text-amber-500/60">"</span>
+                                        {selectedLayer.improvedPrompt}
+                                        <span className="text-amber-500/60">"</span>
                                     </div>
                                 </div>
                             )}

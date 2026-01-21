@@ -102,7 +102,9 @@ export interface LayerData {
   color?: string; // For stickies, groups, and text
   text?: string; // Main text content for stickies and text layers
   fontSize?: number; // Custom font size for text content
-  promptUsed?: string;
+  promptUsed?: string;         // User's original prompt that CREATED this layer (sidebar display)
+  improvedPrompt?: string;      // AI-enhanced prompt that CREATED this layer (sidebar display)
+  lastDraftPrompt?: string;     // Last prompt typed into this layer's PromptBar (draft input)
   referenceImages?: string[]; // Store base64 of refs used for generation
   videoMetadata?: any; // Store Veo video object/handle for extension
   generationMetadata?: GenerationMetadata;
